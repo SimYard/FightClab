@@ -1,0 +1,18 @@
+[build-system]
+build-backend = "uv_build"
+requires = ["uv_build>=0.13.1,<0.14.0"]
+
+[project]
+dependencies = [
+  "mjlab>=1.6.0",
+  "pillow>=13.0.0",
+  "scipy>=1.18.1"
+]
+description = "Arena for humanoid robot fights in mjlab: rules, physical damage, self-play"
+name = "fightclab"
+readme = "README.md"
+requires-python = ">=3.13"
+version = "0.1.0"
+
+[project.entry-points."mjlab.tasks"]
+fightclab = "fightclab.tasks"

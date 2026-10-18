@@ -1,0 +1,19 @@
+name: fightclab
+services:
+  fightclab:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: fightclab
+    container_name: fightclab
+    network_mode: host
+    working_dir: /home/dev/fightclab
+    volumes:
+      - ..:/home/dev/fightclab:rw
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

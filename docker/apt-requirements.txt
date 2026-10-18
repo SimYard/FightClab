@@ -1,0 +1,4 @@
+ca-certificates
+git
+libegl-dev
+sudo
