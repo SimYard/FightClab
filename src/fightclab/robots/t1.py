@@ -1,6 +1,6 @@
 """Booster T1 for FightClab: Booster's MJCF (from GMR) with torque-limited motors.
 
-The model is ``assets/booster_t1/T1_serial.xml`` from GMR, kept outside the repo. T1 is 1.2 m and 35 kg, with 23
+The model is ``assets/booster_t1/T1_serial.xml`` from GMR, in ``assets/robots/t1``. T1 is 1.2 m and 35 kg, with 23
 motors: 6 per leg, waist yaw, 4 per arm, 2 in the head. Its root is the trunk; the legs hang from a waist yaw joint.
 
 Peak torques: Booster's integrated joints come in 7, 36, 60, 90 and 130 N*m (peak; RoboCup HSL 2026 team specs), and
@@ -11,15 +11,14 @@ an inference, not a datasheet. The model's reflected inertia is a placeholder, s
 reflected inertia of the Unitree motor nearest in torque (``unitree.nearest``).
 """
 
-from pathlib import Path
-
 import mujoco
 from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
 
+from fightclab.robots import ASSETS
 from fightclab.robots.g1 import STIFF_COLLISION
 from fightclab.robots.unitree import nearest
 
-T1_XML = Path.home() / "GMR/assets/booster_t1/T1_serial.xml"
+T1_XML = ASSETS / "t1/T1_serial.xml"
 # T1's names for the G1 bodies mjlab's tracking task uses. Its waist link stands in for G1's pelvis.
 G1_NAMES = {
     "pelvis": "Waist",

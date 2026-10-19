@@ -1,4 +1,4 @@
-"""EngineAI's MJCF models (from their GMR fork, BSD-3) prepared for mjlab, with torque-limited motors.
+"""EngineAI's MJCF models (from GMR and EngineAI's GMR fork) prepared for mjlab, with torque-limited motors.
 
 EngineAI publishes torque limits and reflected inertia in its models but no torque-speed curves, so each motor gets
 the speed curve of the Unitree motor nearest in peak torque.
@@ -15,8 +15,8 @@ from fightclab.robots import unitree
 def load(xml: Path, textured: Path | None = None) -> mujoco.MjSpec:
     """An EngineAI MJCF without its motors and sensors; collision geoms named like G1's, IMU sensors as in G1's.
 
-    ``textured`` is a folder of EngineAI's textured meshes for the same robot (``meshes/*.obj`` with UVs,
-    ``texture/*.png``), drawn instead of the model's one-color ones.
+    ``textured`` is a folder of EngineAI's textured meshes for the same robot (``meshes/*.msh`` with UVs,
+    ``texture/*.png`` for most), drawn instead of the model's one-color ones, which then need not be there.
     """
     spec = mujoco.MjSpec.from_file(str(xml))
     for geom in spec.geoms:
@@ -24,8 +24,11 @@ def load(xml: Path, textured: Path | None = None) -> mujoco.MjSpec:
             continue
         mesh = spec.mesh(geom.meshname)
         name = Path(mesh.file).stem
+        if textured:
+            mesh.file = str(textured / "meshes" / f"{name}.msh")
+        elif mesh.file.endswith(".obj"):  # stored as binary MSH in assets/robots, see tools/obj_to_msh.py
+            mesh.file = str(Path(mesh.file).with_suffix(".msh"))
         if textured and (png := textured / "texture" / f"{name}.png").exists():
-            mesh.file = str(textured / "meshes" / f"{name}.obj")
             spec.add_texture(name=name, type=mujoco.mjtTexture.mjTEXTURE_2D, file=str(png))
             spec.add_material(name=name).textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = name
             geom.material = name

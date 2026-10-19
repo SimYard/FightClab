@@ -1,1 +1,3 @@
 * text=auto eol=lf
+# Robot models: third-party (out of the language stats) and diffed as binary, not as millions of mesh lines.
+assets/** linguist-vendored -diff

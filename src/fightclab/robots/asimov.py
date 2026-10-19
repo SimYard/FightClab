@@ -1,7 +1,7 @@
 """Asimov v1 (Menlo) for FightClab: Asimov's MJCF with Menlo's actuator table.
 
-The model is ``sim-model/xmls/asimov_1.xml`` from Asimov (copyleft), kept outside the repo in ~/robot_models/asimov-1;
-do not vendor it. Asimov v1 is 1.2 m and 32 kg, with 23 motors in the model: 6 per leg, waist yaw, 5 per arm.
+The model is Asimov's ``sim-model/xmls/asimov_1.xml``, in ``assets/robots/asimov`` under its CERN-OHL-S licence.
+Asimov v1 is 1.2 m and 32 kg, with 23 motors in the model: 6 per leg, waist yaw, 5 per arm.
 Torque and speed limits are Menlo's per-joint table (docs.menlo.ai/asimov/1/hardware/joint-design-and-actuation):
 peak torque, modeled as full torque up to the velocity limit. The URDF's efforts are close to the rated torques,
 a third of the peaks. The ankle's two linkage actuators (A 145.4, B 57.6 N*m peak) are mapped to pitch and roll as the
@@ -9,16 +9,14 @@ URDF maps their rated torques. Reflected inertia is the MJCF's. Its joints are n
 knee 86 deg, ankles +-20 and +-6 deg.
 """
 
-from pathlib import Path
-
 import mujoco
 from mjlab.asset_zoo.robots.unitree_g1 import g1_constants as g1
 from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
 
-from fightclab.robots import unitree
+from fightclab.robots import ASSETS, unitree
 from fightclab.robots.g1 import STIFF_COLLISION, Motor, unitree_motor
 
-ASIMOV_XML = Path.home() / "robot_models/asimov-1/sim-model/xmls/asimov_1.xml"
+ASIMOV_XML = ASSETS / "asimov/xmls/asimov_1.xml"
 G1_NAMES = {"pelvis": "pelvis_link", "torso_link": "waist_yaw_link"}  # its other bodies are named like G1's
 
 # Joint: Menlo's peak torque (N*m) and velocity limit (rad/s), MJCF armature (kg*m^2).

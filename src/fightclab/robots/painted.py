@@ -8,12 +8,12 @@ from pathlib import Path
 
 import mujoco
 
-PAINTED = Path.home() / "robot_models/painted"
+from fightclab.robots import ASSETS
 
 
 def apply(spec: mujoco.MjSpec, robot: str) -> None:
     """Swap the visual mesh geoms that have painted parts for one geom per part; no-op if the robot is unpainted."""
-    folder = PAINTED / robot
+    folder = ASSETS / robot / "painted"
     if not (folder / "parts.json").exists():
         return
     parts = json.loads((folder / "parts.json").read_text())
