@@ -25,11 +25,11 @@ from fightclab.tasks.helicopter_kick import mdp
 FEET = "feet_ground_contact"
 
 
-def feet_ground_contact() -> ContactSensorCfg:
-    """Each foot's contact with the floor."""
+def feet_ground_contact(left: str = "left_ankle_roll_link", right: str = "right_ankle_roll_link") -> ContactSensorCfg:
+    """Each foot's contact with the floor: anything in the subtree of the given ankle bodies."""
     return ContactSensorCfg(
         name=FEET,
-        primary=ContactMatch(mode="subtree", pattern=r"^(left_ankle_roll_link|right_ankle_roll_link)$", entity="robot"),
+        primary=ContactMatch(mode="subtree", pattern=rf"^({left}|{right})$", entity="robot"),
         secondary=ContactMatch(mode="body", pattern="terrain"),
         fields=("found", "force"),
         reduce="netforce",

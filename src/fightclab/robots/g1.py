@@ -86,14 +86,15 @@ def unitree_motor(
     armature: float,
     stiffness: float,
     damping: float,
-    count: int = 1,
+    count: float = 1,
     cap: float | None = None,
 ) -> DcMotorActuatorCfg:
     """Unitree's torque-speed curve: ``y1`` up to ``x1`` rad/s, then linear down to zero at ``x2``.
 
     mjlab's DC motor curve is ``min(effort_limit, saturation * (1 - |v| / velocity_limit))``, which matches
     that shape exactly when the line goes through (x1, y1) and (x2, 0).
-    ``count`` motors drive the joint together through a linkage; ``cap`` is the joint's URDF effort limit.
+    ``count`` motors drive the joint together through a linkage (torque, inertia and friction scale with it);
+    ``cap`` is the joint's URDF effort limit.
 
     ponytail: braking (torque against the motion) is also capped at y1. Unitree measures a higher braking
     peak (Y2), but mjlab's DC model has one limit for both directions; a custom actuator would add Y2.

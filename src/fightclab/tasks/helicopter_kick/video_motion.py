@@ -1,11 +1,13 @@
-"""Helicopter kick reference from video: a Ginger Ninja tutorial clip through GVHMR and GMR, fitted to G1.
+"""Helicopter kick reference from video: a Ginger Ninja tutorial clip through GVHMR and GMR, fitted to a robot.
 
-Pipeline, each step in its own environment:
+Pipeline, each step in its own environment (``<robot>`` is g1, r1, h2, pm01, t800, t1 or asimov):
 1. Cut the kick to a 30 fps clip with no cuts, the whole body in frame, a static camera.
 2. GVHMR (~/GVHMR): ``python tools/demo/demo.py --video=<clip> -s`` -> hmr4d_results.pt
-3. GMR (~/GMR): ``~/GMR/.venv/bin/python tools/gvhmr_to_g1_csv.py <hmr4d_results.pt> /tmp/raw.csv``
-4. This module: ``uv run python -m fightclab.tasks.helicopter_kick.video_motion /tmp/raw.csv /tmp/video.csv``
-5. csv_to_npz as in reference.py (``--input-fps 30``), copied to helicopter_kick_video.npz.
+3. GMR (~/GMR): ``~/GMR/.venv/bin/python tools/gvhmr_to_csv.py <robot> <hmr4d_results.pt> /tmp/raw.csv``
+4. This module: ``uv run python -m fightclab.tasks.helicopter_kick.video_motion <robot> /tmp/raw.csv /tmp/video.csv``
+5. ``uv run python -m fightclab.tasks.helicopter_kick.motion_npz <robot> /tmp/video.csv``
+
+The timing below was tuned on G1 and is used for every robot.
 
 What the cleanup fixes:
 - the tutorial shows the kick in slow motion, about 2x (a 1.2 s flight would need a 1.8 m jump);
@@ -31,15 +33,64 @@ to 0.7-1.1 m. The tracking task tolerates the shortfall and lets the policy find
 """
 
 import sys
+from collections.abc import Callable
+from dataclasses import dataclass
 
 import mujoco
 import numpy as np
+from mjlab.asset_zoo.robots.unitree_g1 import g1_constants
 from numpy.typing import NDArray
 from scipy.signal import savgol_filter
 from scipy.spatial.transform import Rotation
 
 from fightclab.feasibility import report
-from fightclab.tasks.helicopter_kick.reference import JOINTS, Solver
+from fightclab.robots import asimov, h2, pm01, r1, t1, t800
+from fightclab.tasks.helicopter_kick.reference import JOINTS
+
+
+@dataclass(frozen=True)
+class Robot:
+    """What the cleanup needs to know about a robot."""
+
+    spec: Callable[[], mujoco.MjSpec]
+    waist: tuple[str, ...]
+    """Joints damped by WAIST_SCALE."""
+    csv_joints: tuple[str, ...] | None = None
+    """The CSV's joint columns if GMR writes them in another order than the model's."""
+    feet: tuple[str, str] = ("left_ankle_roll_link", "right_ankle_roll_link")
+    """The last body of each leg."""
+    root: str = "pelvis"
+    flight: float | None = None
+    """FLIGHT for this robot, if not G1's."""
+    push_speed: float | None = None
+    """PUSH_SPEED for this robot, if not G1's."""
+
+    @property
+    def joints(self) -> tuple[str, ...]:
+        """The CSV's joint columns, in order."""
+        if self.csv_joints:
+            return self.csv_joints
+        m = self.spec().compile()  # not spec.joints: after MjSpec.delete it can hold stale entries
+        return tuple(m.joint(i).name for i in range(m.njnt) if m.jnt_type[i] == mujoco.mjtJoint.mjJNT_HINGE)
+
+
+ROBOTS = {
+    "g1": Robot(g1_constants.get_spec, ("waist_roll_joint", "waist_pitch_joint"), JOINTS),  # Unitree SDK order
+    "r1": Robot(r1.get_spec, ("waist_roll_joint",)),
+    "h2": Robot(
+        h2.get_spec, ("waist_roll_joint", "waist_pitch_joint"), feet=("left_ankle_pitch_link", "right_ankle_pitch_link")
+    ),
+    "pm01": Robot(pm01.get_spec, (), feet=("LINK_FOOT_L", "LINK_FOOT_R"), root="LINK_BASE"),  # waist yaw only
+    "t800": Robot(t800.get_spec, (), feet=("LINK_FOOT_L", "LINK_FOOT_R"), root="LINK_BASE"),  # torso yaw only
+    # T1's crouch is shallow and its ankles barely point the toes (20 deg), so its center of mass rises only 10 cm in
+    # the push-off, against G1's 21. That reaches ~1.3 m/s, a 0.3 s flight (~10 cm hop), not G1's 0.55 s; faster
+    # push-offs were too short to survive the smoothing and left the takeoff speed short again.
+    "t1": Robot(
+        t1.get_spec, (), feet=("left_foot_link", "right_foot_link"), root="Trunk", flight=0.30, push_speed=1.2
+    ),  # waist yaw only
+    # Asimov's knee bends 86 deg and its ankles +-20: its push-off reaches ~1.5 m/s, a 0.4 s flight, not G1's 0.55 s.
+    "asimov": Robot(asimov.get_spec, (), root="pelvis_link", flight=0.40, push_speed=1.2),  # waist yaw only
+}
 
 FPS = 30  # of the clip and of the output
 G = 9.81
@@ -52,26 +103,37 @@ PUSH_SPEED = 1.0  # push-off length: 0.2 s at 1.0, ~1.7 g; at 2.0 it was 0.1 s a
 YAW_WINDOW, TILT_WINDOW, JOINT_WINDOW = 21, 31, 9  # Savitzky-Golay windows, frames
 TILT_SCALE = 1.0  # pelvis roll/pitch kept: leaning away is what lifts the heel to head height
 WAIST_SCALE = 0.5  # waist roll/pitch kept
-WAIST = [7 + JOINTS.index("waist_roll_joint"), 7 + JOINTS.index("waist_pitch_joint")]
 HOLD = 0.4  # s of the final pose appended, so the motion settles instead of stopping dead
 SUNK = 0.005  # m below the floor that the summary reports as a sunk foot
 
 
-def heights(rows: NDArray[np.float64]) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
-    """Per frame: height of the lowest point of either foot's collision capsules, and of the center of mass."""
-    s = Solver()
-    adr = np.array([s.m.jnt_qposadr[s.m.joint(n).id] for n in JOINTS])
-    feet = [g for g in range(s.m.ngeom) if "foot" in (s.m.geom(g).name or "")]
-    pelvis = s.m.body("pelvis").id
+def heights(rows: NDArray[np.float64], robot: Robot) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Per frame: height of the lowest point of the feet's primitive geoms, and of the center of mass."""
+    m = robot.spec().compile()
+    d = mujoco.MjData(m)
+    adr = np.array([m.jnt_qposadr[m.joint(n).id] for n in robot.joints])
+    soles = {m.body(foot).id for foot in robot.feet}
+    shapes = (mujoco.mjtGeom.mjGEOM_SPHERE, mujoco.mjtGeom.mjGEOM_CAPSULE, mujoco.mjtGeom.mjGEOM_BOX)
+    feet = [g for g in range(m.ngeom) if m.geom_bodyid[g] in soles and m.geom_type[g] in shapes]
+    pelvis = m.body(robot.root).id
     low, com = np.zeros(len(rows)), np.zeros(len(rows))
     for i, r in enumerate(rows):
-        s.d.qpos[:3], s.d.qpos[3:7], s.d.qpos[adr] = r[:3], (r[6], r[3], r[4], r[5]), r[7:]
-        mujoco.mj_kinematics(s.m, s.d)
-        mujoco.mj_comPos(s.m, s.d)
-        axis_z = np.abs(s.d.geom_xmat[feet][:, 8])  # z component of each capsule's axis
-        low[i] = (s.d.geom_xpos[feet][:, 2] - axis_z * s.m.geom_size[feet, 1] - s.m.geom_size[feet, 0]).min()
-        com[i] = s.d.subtree_com[pelvis, 2]
+        d.qpos[:3], d.qpos[3:7], d.qpos[adr] = r[:3], (r[6], r[3], r[4], r[5]), r[7:]
+        mujoco.mj_kinematics(m, d)
+        mujoco.mj_comPos(m, d)
+        low[i] = min(_lowest(m, d, g) for g in feet)
+        com[i] = d.subtree_com[pelvis, 2]
     return low, com
+
+
+def _lowest(m: mujoco.MjModel, d: mujoco.MjData, g: int) -> float:
+    """Height of a sphere's, capsule's or box's lowest point."""
+    z, rz, size = d.geom_xpos[g, 2], np.abs(d.geom_xmat[g].reshape(3, 3)[2]), m.geom_size[g]
+    if m.geom_type[g] == mujoco.mjtGeom.mjGEOM_BOX:
+        return float(z - rz @ size)
+    if m.geom_type[g] == mujoco.mjtGeom.mjGEOM_CAPSULE:
+        return float(z - rz[2] * size[1] - size[0])
+    return float(z - size[0])
 
 
 def push_start() -> float:
@@ -79,19 +141,28 @@ def push_start() -> float:
     return PUSH_START / SLOWMO * SPIN_UP_SLOW
 
 
-def phases() -> tuple[float, float]:
-    """Takeoff and landing in output (G1) seconds."""
-    t0 = push_start() + (TAKEOFF - PUSH_START) / SLOWMO / PUSH_SPEED
-    return t0, t0 + FLIGHT
+def jump(robot: Robot | None = None) -> tuple[float, float]:
+    """The robot's flight time and push-off speed."""
+    if robot is None:
+        return FLIGHT, PUSH_SPEED
+    return robot.flight or FLIGHT, robot.push_speed or PUSH_SPEED
 
 
-def clip_time(t: NDArray[np.float64]) -> NDArray[np.float64]:
+def phases(robot: Robot | None = None) -> tuple[float, float]:
+    """Takeoff and landing in output (robot) seconds."""
+    flight, push_speed = jump(robot)
+    t0 = push_start() + (TAKEOFF - PUSH_START) / SLOWMO / push_speed
+    return t0, t0 + flight
+
+
+def clip_time(t: NDArray[np.float64], robot: Robot) -> NDArray[np.float64]:
     """Clip seconds shown at output seconds: spin-up slowed, push-off sped up, flight squeezed, landing real time."""
-    t0, t1 = phases()
+    t0, t1 = phases(robot)
+    flight, push_speed = jump(robot)
     t_push = push_start()
     spin_up = t * SLOWMO / SPIN_UP_SLOW
-    push = PUSH_START + (t - t_push) * SLOWMO * PUSH_SPEED
-    air = TAKEOFF + (t - t0) / FLIGHT * (LANDING - TAKEOFF)
+    push = PUSH_START + (t - t_push) * SLOWMO * push_speed
+    air = TAKEOFF + (t - t0) / flight * (LANDING - TAKEOFF)
     post = LANDING + (t - t1) * SLOWMO
     return np.select([t < t_push, t < t0, t < t1], [spin_up, push, air], post)
 
@@ -108,15 +179,15 @@ def resample(rows: NDArray[np.float64], src: NDArray[np.float64]) -> NDArray[np.
     return out
 
 
-def even_push(rows: NDArray[np.float64]) -> NDArray[np.float64]:
+def even_push(rows: NDArray[np.float64], robot: Robot) -> NDArray[np.float64]:
     """Retime the push-off so the grounded center of mass rises with constant acceleration from the crouch.
 
     The person's extension starts slow and ends fast; sped up enough to reach the takeoff speed, it asked for
     ~4.5 g in its last frames. Rising evenly from rest, the same height and takeoff speed take ~1.7 g.
     """
     t = np.arange(len(rows)) / FPS
-    t_push, t0 = push_start(), phases()[0]
-    low, com = heights(rows)
+    t_push, t0 = push_start(), phases(robot)[0]
+    low, com = heights(rows, robot)
     push = (t >= t_push) & (t <= t0)
     height = np.maximum.accumulate((com - low)[push])  # the grounded center of mass, made monotonic
     u = (t[push] - t[push][0]) / (t[push][-1] - t[push][0])
@@ -126,15 +197,15 @@ def even_push(rows: NDArray[np.float64]) -> NDArray[np.float64]:
     return out
 
 
-def ground_and_fly(rows: NDArray[np.float64]) -> NDArray[np.float64]:
+def ground_and_fly(rows: NDArray[np.float64], robot: Robot) -> NDArray[np.float64]:
     """Lowest foot on the floor on the ground; in the air the center of mass flies a parabola.
 
     The parabola is for the center of mass, not the pelvis: the kicking leg swings up in the air, and with a
     ballistic pelvis the center of mass would rise with it, pushed by nothing.
     """
     t = np.arange(len(rows)) / FPS
-    t0, t1 = phases()
-    low, com = heights(rows)
+    t0, t1 = phases(robot)
+    low, com = heights(rows, robot)
     above = com - rows[:, 2]  # center of mass over the pelvis, set by the pose
     z = rows[:, 2] - low
     air = (t > t0) & (t < t1)
@@ -151,7 +222,7 @@ def ground_and_fly(rows: NDArray[np.float64]) -> NDArray[np.float64]:
     return out
 
 
-def fit_to_g1(rows: NDArray[np.float64]) -> NDArray[np.float64]:
+def fit(rows: NDArray[np.float64], robot: Robot) -> NDArray[np.float64]:
     """Smooth the spin, smooth and damp the pelvis tilt and waist roll/pitch, filter the jitter."""
     out = rows.copy()
     yaw, pitch, roll = Rotation.from_quat(rows[:, 3:7]).as_euler("ZYX").T
@@ -161,48 +232,52 @@ def fit_to_g1(rows: NDArray[np.float64]) -> NDArray[np.float64]:
     out[:, 3:7] = Rotation.from_euler("ZYX", np.stack([yaw, pitch, roll], axis=1)).as_quat()  # xyzw
     out[:, :3] = savgol_filter(rows[:, :3], JOINT_WINDOW, 3, axis=0)
     out[:, 7:] = savgol_filter(rows[:, 7:], JOINT_WINDOW, 3, axis=0)
-    out[:, WAIST] *= WAIST_SCALE
+    joints = robot.joints
+    out[:, [7 + joints.index(j) for j in robot.waist]] *= WAIST_SCALE
     return out
 
 
-def lift_sunk_feet(rows: NDArray[np.float64]) -> NDArray[np.float64]:
+def lift_sunk_feet(rows: NDArray[np.float64], robot: Robot) -> NDArray[np.float64]:
     """Raise the pelvis wherever the smoothing pushed a foot into the floor, smoothly."""
-    lift = np.clip(-heights(rows)[0], 0.0, None)
+    lift = np.clip(-heights(rows, robot)[0], 0.0, None)
     lift = np.maximum(savgol_filter(lift, 9, 2), lift)  # smooth, but never less than needed
     out = rows.copy()
     out[:, 2] += lift
     return out
 
 
-def clean(rows: NDArray[np.float64]) -> NDArray[np.float64]:
-    """A 30 fps clip-time G1 motion -> 30 fps G1-time rows, fitted to G1, grounded, with a G1-sized flight.
+def clean(rows: NDArray[np.float64], robot: Robot) -> NDArray[np.float64]:
+    """A 30 fps clip-time robot motion -> 30 fps robot-time rows, fitted, grounded, with a G1-sized flight.
 
     Grounding comes after the smoothing: smoothing a grounded, ballistic height spread the takeoff's kink
     into the air, where the reference then kept accelerating upward with nothing to push against.
     """
-    _t0, t1 = phases()
+    _t0, t1 = phases(robot)
     end = t1 + (len(rows) / FPS - LANDING) / SLOWMO
     t = np.arange(0.0, end, 1.0 / FPS)
-    out = resample(rows, clip_time(t) * FPS)
+    out = resample(rows, clip_time(t, robot) * FPS)
     out = np.concatenate([out, np.repeat(out[-1:], round(HOLD * FPS), axis=0)])
-    return lift_sunk_feet(ground_and_fly(even_push(fit_to_g1(out))))
+    return lift_sunk_feet(ground_and_fly(even_push(fit(out, robot), robot), robot), robot)
 
 
 if __name__ == "__main__":
-    rows = clean(np.loadtxt(sys.argv[1], delimiter=","))
-    np.savetxt(sys.argv[2], rows, delimiter=",", fmt="%.6f")
-    low, com = heights(rows)
+    name, raw, out = sys.argv[1:4]
+    robot = ROBOTS[name]
+    rows = clean(np.loadtxt(raw, delimiter=","), robot)
+    np.savetxt(out, rows, delimiter=",", fmt="%.6f")
+    low, com = heights(rows, robot)
     yaw = np.degrees(np.unwrap(2 * np.arctan2(rows[:, 5], rows[:, 6])))
-    print(f"{len(rows)} frames, {len(rows) / FPS:.2f} s -> {sys.argv[2]}")
+    print(f"{len(rows)} frames, {len(rows) / FPS:.2f} s -> {out}")
     print(f"pelvis {rows[:, 2].min():.2f}..{rows[:, 2].max():.2f} m, turn {yaw[-1] - yaw[0]:+.0f} deg")
     # The push-off has to reach the flight's takeoff speed while the feet are still down.
     vz = np.diff(com) * FPS
-    i0 = int(phases()[0] * FPS)
+    i0 = int(phases(robot)[0] * FPS)
     print(
         "center of mass speed up between frames around takeoff:",
         " ".join(f"{v:+.1f}" for v in vz[i0 - 4 : i0 + 3]),
         "m/s",
     )
     print(f"feet below the floor by >5 mm in {(low < -SUNK).sum()} frames, worst {low.min() * 1000:.0f} mm")
-    print("G1 motors:")
-    report(rows, FPS)
+    if name == "g1":  # ponytail: the inverse-dynamics report knows G1 only; generalize when tuning another robot
+        print("G1 motors:")
+        report(rows, FPS)

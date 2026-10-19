@@ -1,8 +1,9 @@
-"""Van Damme's helicopter kick (360 split kick) for G1.
+"""Van Damme's helicopter kick (360 split kick).
 
-Two tasks:
+Tasks:
 - ``Fightclab-HelicopterKick-G1``: pure RL from rewards, no reference. It learns a jump-turn, not a kick.
-- ``Fightclab-HelicopterKick-Tracking-G1``: tracks the keyframe reference from ``reference.py``.
+- ``Fightclab-HelicopterKick-Tracking-<robot>``: tracks the kick from video (``video_motion.py``) on G1, R1, H2,
+  PM01, T800, T1 and ASIMOV.
 """
 
 from mjlab.tasks.registry import register_mjlab_task
@@ -11,8 +12,15 @@ from mjlab.tasks.tracking.rl import MotionTrackingOnPolicyRunner
 from fightclab.tasks.helicopter_kick.env_cfg import g1_helicopter_kick_env_cfg
 from fightclab.tasks.helicopter_kick.rl_cfg import g1_helicopter_kick_ppo_runner_cfg
 from fightclab.tasks.helicopter_kick.tracking import (
+    asimov_helicopter_kick_tracking_env_cfg,
     g1_helicopter_kick_tracking_env_cfg,
     g1_helicopter_kick_tracking_ppo_runner_cfg,
+    h2_helicopter_kick_tracking_env_cfg,
+    pm01_helicopter_kick_tracking_env_cfg,
+    ppo_runner_cfg,
+    r1_helicopter_kick_tracking_env_cfg,
+    t1_helicopter_kick_tracking_env_cfg,
+    t800_helicopter_kick_tracking_env_cfg,
 )
 
 register_mjlab_task(
@@ -29,3 +37,19 @@ register_mjlab_task(
     rl_cfg=g1_helicopter_kick_tracking_ppo_runner_cfg(),
     runner_cls=MotionTrackingOnPolicyRunner,
 )
+
+for robot, env_cfg in (
+    ("r1", r1_helicopter_kick_tracking_env_cfg),
+    ("h2", h2_helicopter_kick_tracking_env_cfg),
+    ("pm01", pm01_helicopter_kick_tracking_env_cfg),
+    ("t800", t800_helicopter_kick_tracking_env_cfg),
+    ("t1", t1_helicopter_kick_tracking_env_cfg),
+    ("asimov", asimov_helicopter_kick_tracking_env_cfg),
+):
+    register_mjlab_task(
+        task_id=f"Fightclab-HelicopterKick-Tracking-{robot.upper()}",
+        env_cfg=env_cfg(),
+        play_env_cfg=env_cfg(play=True),
+        rl_cfg=ppo_runner_cfg(robot),
+        runner_cls=MotionTrackingOnPolicyRunner,
+    )
