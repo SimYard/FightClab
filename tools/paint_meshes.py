@@ -40,6 +40,8 @@ GRAPHITE: Rgba = (0.24, 0.24, 0.26, 1.0)
 METAL: Rgba = (0.35, 0.35, 0.37, 1.0)
 CARBON: Rgba = (0.17, 0.17, 0.18, 1.0)
 RED: Rgba = (0.8, 0.08, 0.1, 1.0)
+ORANGE: Rgba = (0.95, 0.4, 0.06, 1.0)
+SILVER: Rgba = (0.72, 0.72, 0.74, 1.0)
 
 FLAT = 0.015  # m: a hole's rim at most this thick is flat enough to close with a fan
 FACING = 0.2  # a decal reaches faces whose normal is at most ~78 degrees off its axis
@@ -171,6 +173,8 @@ R1_CHEST: list[Shape] = [
     R1_BLADE,
     flip_shape(R1_BLADE),
 ]
+ASIMOV_EAR = 0.04  # m: the head's surfaces centered past |y| = 40 mm are its ears
+ASIMOV_CAP: list[Shape] = [("poly", ORANGE, [(-0.1, -0.005), (0.1, -0.005), (0.1, 0.1), (-0.1, 0.1)])]  # z > -5 mm
 ROBOTS: dict[str, dict[str, Any]] = {
     "r1": {
         "meshes": "r1/meshes",
@@ -261,6 +265,28 @@ ROBOTS: dict[str, dict[str, Any]] = {
             ("head_yaw_link", ((0.05, -0.06, -0.06), (0.2, 0.06, 0.0)), BLACK),  # visor slit
         ),
     },
+    # Menlo Asimov 1, from Menlo's renders and photos: gloss black; orange helmet, chest shell, shoulder caps, elbow
+    # and knee plates, and bands above the elbows and the ankles; black visor and ears; silver ankle links and rods.
+    "asimov": {
+        "meshes": "asimov/assets/meshes",
+        "colors": (("NECK_PITCH", ORANGE), ("*_ANKLE_A", SILVER), ("*", BLACK)),
+        "surfaces": (("NECK_PITCH", lambda c: abs(c[:, 1]) > ASIMOV_EAR, BLACK),),  # ears: discs and rims
+        "picks": (  # (mesh, axis, point seen along it, color): the CAD surface seen there
+            ("NECK_PITCH", "+x", (0.0, 0.07), BLACK),  # visor
+            ("WAIST_YAW", "+x", (0.0, 0.2), ORANGE),  # chest shell
+            ("*_SHOULDER_ROLL", "+y", (0.0, -0.131), ORANGE),  # band above the elbow
+            ("*_ELBOW", "+y", (-0.005, 0.005), ORANGE),  # plate
+            ("*_KNEE", "+y", (-0.005, -0.02), ORANGE),  # plate
+            ("*_KNEE", "+y", (-0.003, -0.262), ORANGE),  # band above the ankle
+            ("*_KNEE", "+x", (0.0, -0.262), ORANGE),
+            ("*_KNEE", "-y", (-0.003, -0.262), ORANGE),
+            ("*_KNEE", "-x", (0.0, -0.262), ORANGE),
+            ("*_KNEE", "+x", (-0.021, -0.298), SILVER),  # rods
+            ("*_KNEE", "+x", (0.021, -0.298), SILVER),
+        ),
+        # The shoulder caps are the top of the upper arm's shell, which is one surface down to the elbow.
+        "decals": tuple(("*_SHOULDER_ROLL", axis, ASIMOV_CAP, BLACK, ()) for axis in ("+x", "-x", "+y", "-y", "+z")),
+    },
 }
 
 
@@ -286,6 +312,23 @@ def caps(mesh: trimesh.Trimesh, b: Box) -> np.ndarray:
         for p, q in zip(ring, np.roll(ring, -1, axis=0), strict=False):
             triangles += [(center, p, q), (center, q, p)]
     return np.array(triangles).reshape(-1, 3, 3)
+
+
+def first_hit(tri: np.ndarray, axis: str, point: tuple[float, float]) -> int | None:
+    """The triangle a ray from outside, along ``axis`` reversed through plane point ``point``, hits first."""
+    sign, ax = (1 if axis[0] == "+" else -1), "xyz".index(axis[1])
+    p = tri[:, :, list(PLANE[axis[1]])] - point
+
+    def cross(u: np.ndarray, v: np.ndarray) -> np.ndarray:
+        return u[..., 0] * v[..., 1] - u[..., 1] * v[..., 0]
+
+    w = np.stack([cross(p[:, 1], p[:, 2]), cross(p[:, 2], p[:, 0]), cross(p[:, 0], p[:, 1])], axis=1)
+    total = w.sum(axis=1)
+    hit = np.flatnonzero((total != 0) & np.all(np.sign(w) == np.sign(total)[:, None], axis=1))
+    if not len(hit):
+        return None
+    depth = (w[hit] * tri[hit, :, ax]).sum(axis=1) / total[hit]
+    return int(hit[np.argmax(sign * depth)])
 
 
 def hull(points: np.ndarray) -> list[tuple[float, float]]:
@@ -404,13 +447,13 @@ def paint_mesh(path: Path, cfg: dict[str, Any], out: Path) -> list[tuple[str, Rg
     """Paint one mesh; returns its parts as (MSH file, white, PNG texture)."""
     name = path.stem
     mesh = trimesh.load(path, process=True)
-    flip = name.startswith("right_")
+    flip = name.lower().startswith("right_")
     if flip:  # paint the mirror image with the left side's rules
         mesh.vertices[:, 1] *= -1
         mesh.invert()
     tri, centers, normals = mesh.triangles, mesh.triangles_center, face_normals(mesh.triangles)
-    kinds = ("parts", "surfaces", "regions", "vents", "decals", "caps")
-    rules = {k: [r for r in cfg[k] if fnmatch.fnmatch(name, r[0])] for k in kinds}
+    kinds = ("parts", "surfaces", "picks", "regions", "vents", "decals", "caps")
+    rules = {k: [r for r in cfg.get(k, ()) if fnmatch.fnmatch(name, r[0])] for k in kinds}
     base = next(color for pattern, color in cfg["colors"] if fnmatch.fnmatch(name, pattern))
     colors = np.array([base] * len(tri))
     labels = trimesh.graph.connected_component_labels(mesh.face_adjacency, node_count=len(tri))
@@ -420,7 +463,7 @@ def paint_mesh(path: Path, cfg: dict[str, Any], out: Path) -> list[tuple[str, Rg
         part_center[labels == lab] = (pts.min(axis=0) + pts.max(axis=0)) / 2
     for _, b, color in rules["parts"]:
         colors[inside(part_center, b)] = color
-    if rules["surfaces"]:
+    if rules["surfaces"] or rules["picks"]:
         # Surfaces: patches bounded by the CAD model's creases, so a surface painted whole has its exact edges.
         smooth = mesh.face_adjacency[mesh.face_adjacency_angles < np.radians(CREASE)]
         surface = trimesh.graph.connected_component_labels(smooth, node_count=len(tri))
@@ -429,6 +472,11 @@ def paint_mesh(path: Path, cfg: dict[str, Any], out: Path) -> list[tuple[str, Rg
         surface_center = np.stack([np.bincount(surface, area * centers[:, i]) / weight for i in range(3)], axis=1)
         for _, test, color in rules["surfaces"]:
             colors[test(surface_center[surface])] = color
+        for _, axis, point, color in rules["picks"]:
+            if (face := first_hit(tri, axis, point)) is None:
+                print(f"  {name}: nothing seen along {axis} at {point}")
+            else:
+                colors[surface == surface[face]] = color
     for _, test, color in rules["regions"]:
         colors[test(centers, normals)] = color
     decals = [(m, axis, list(shapes), over, skip) for m, axis, shapes, over, skip in rules["decals"]]

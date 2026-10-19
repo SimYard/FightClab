@@ -26,8 +26,9 @@ Models are kept as their makers publish them, each folder with its maker's licen
 
 Left out: PM01's one-grey STL meshes (its textured meshes replace them) and T800's DAE copies. Converted: the OBJ meshes
 of PM01 and T800, to MuJoCo's binary MSH by `tools/obj_to_msh.py` (same vertices, texture coordinates and normals; they
-render pixel for pixel the same). Added: R1's colors, `assets/robots/r1/painted`, made from Unitree's product photos by
-`tools/paint_meshes.py`.
+render pixel for pixel the same). Added: the colors of R1 and Asimov (`assets/robots/<robot>/painted`), made from
+Unitree's and Menlo's product photos by `tools/paint_meshes.py`. Changed at load time, not in the files: Asimov's hip
+and elbow ranges, to Menlo's actuator table (the MJCF stops hip flexion at 90 degrees, the table allows 120).
 
 ## License
 
