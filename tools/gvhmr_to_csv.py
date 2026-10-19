@@ -44,6 +44,8 @@ class Extra:
     """G1 bodies named otherwise on the robot."""
     arm_rotations: bool = True
     """False where elbow and wrist frames are turned against G1's: match their positions only."""
+    ranges: tuple[tuple[str, float, float], ...] = ()
+    """Joint ranges (rad) to use instead of the model's."""
 
 
 EXTRAS = {
@@ -71,6 +73,13 @@ EXTRAS = {
         straight_hips=True,
         renames=(("pelvis", "pelvis_link"), ("torso_link", "waist_yaw_link")),
         arm_rotations=False,  # its elbow and wrist frames are turned 45 degrees
+        # Menlo's table, as fightclab.robots.asimov.RANGES (this script runs in GMR's venv, without fightclab).
+        ranges=(
+            ("left_hip_pitch_joint", -2.09, 1.00),
+            ("right_hip_pitch_joint", -1.00, 2.09),
+            ("left_elbow_joint", 0.0, 2.44),
+            ("right_elbow_joint", -2.44, 0.0),
+        ),
     ),
 }
 
@@ -85,6 +94,8 @@ def mocap(e: Extra, name: str) -> pathlib.Path:
     for element in [*spec.actuators, *spec.sensors]:
         if getattr(element, "target", None) in gone or getattr(element, "objname", None) in gone:
             spec.delete(element)
+    for joint, lo, hi in e.ranges:
+        spec.joint(joint).range = [lo, hi]
     x, y, z = e.toe
     for side, sign in (("left", 1), ("right", -1)):
         spec.body(f"{side}_{e.foot}").add_body(name=f"{side}_toe_link", pos=[x, sign * y, z])

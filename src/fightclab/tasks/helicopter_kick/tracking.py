@@ -115,6 +115,23 @@ def feet_height(env: ManagerBasedRlEnv, command_name: str, body_names: tuple[str
     return torch.exp(-(error**2) / std**2).mean(dim=-1)
 
 
+def bad_anchor_heading(env: ManagerBasedRlEnv, command_name: str, threshold: float) -> torch.Tensor:
+    """True when the anchor body faces more than ``threshold`` radians off the reference's heading.
+
+    mjlab's anchor terminations check its height and tilt, not where it faces: Asimov landed every kick by turning
+    70 degrees and back instead of 360.
+    """
+    motion = env.command_manager.get_term(command_name)
+    assert isinstance(motion, MotionCommand)
+
+    def heading(q: torch.Tensor) -> torch.Tensor:  # of the body's x axis, projected on the floor; q is (w, x, y, z)
+        w, x, y, z = q.unbind(-1)
+        return torch.atan2(2 * (x * y + w * z), 1 - 2 * (y * y + z * z))
+
+    error = heading(motion.anchor_quat_w) - heading(motion.robot_anchor_quat_w)
+    return torch.atan2(torch.sin(error), torch.cos(error)).abs() > threshold
+
+
 def g1_helicopter_kick_tracking_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     """Mjlab's G1 tracking task on the video kick, with adaptive tracking tolerances.
 
@@ -145,6 +162,10 @@ def g1_helicopter_kick_tracking_env_cfg(play: bool = False) -> ManagerBasedRlEnv
     feet = ("left_ankle_roll_link", "right_ankle_roll_link")
     cfg.terminations["feet_pos"] = TerminationTermCfg(
         func=bad_motion_body_pos_z_only, params={"command_name": "motion", "threshold": 0.25, "body_names": feet}
+    )
+    # Facing within 60 degrees of the reference: the spin is the kick.
+    cfg.terminations["anchor_heading"] = TerminationTermCfg(
+        func=bad_anchor_heading, params={"command_name": "motion", "threshold": 1.05}
     )
     cfg.rewards["feet_height"] = RewardTermCfg(
         func=feet_height, weight=2.0, params={"command_name": "motion", "body_names": feet, "std": 0.1}

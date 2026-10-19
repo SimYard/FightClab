@@ -5,15 +5,16 @@ Asimov v1 is 1.2 m and 32 kg, with 23 motors in the model: 6 per leg, waist yaw,
 Torque and speed limits are Menlo's per-joint table (docs.menlo.ai/asimov/1/hardware/joint-design-and-actuation):
 peak torque, modeled as full torque up to the velocity limit. The URDF's efforts are close to the rated torques,
 a third of the peaks. The ankle's two linkage actuators (A 145.4, B 57.6 N*m peak) are mapped to pitch and roll as the
-URDF maps their rated torques. Reflected inertia is the MJCF's. Its joints are narrow for this kick: hip pitch +-90 deg,
-knee 86 deg, ankles +-20 and +-6 deg.
+URDF maps their rated torques. Reflected inertia is the MJCF's. Joint ranges are the MJCF's except where Menlo's table
+allows more (``RANGES``). Its joints are narrow for this kick: hip flexion 120 deg, hip roll and yaw +-45 deg, knee
+86 deg, ankles +-20 and +-6 deg.
 """
 
 import mujoco
 from mjlab.asset_zoo.robots.unitree_g1 import g1_constants as g1
 from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
 
-from fightclab.robots import ASSETS, unitree
+from fightclab.robots import ASSETS, painted, unitree
 from fightclab.robots.g1 import STIFF_COLLISION, Motor, unitree_motor
 
 ASIMOV_XML = ASSETS / "asimov/xmls/asimov_1.xml"
@@ -36,9 +37,23 @@ LIMITS = {
 }
 
 
+# Menlo's table allows the hips 120 deg of flexion and 57 of extension, the MJCF +-90; the kicking leg was held at
+# 90. The elbows bend to 140 deg, not 120. In radians, as in the table; tools/gvhmr_to_csv.py repeats them.
+RANGES = {
+    "left_hip_pitch_joint": (-2.09, 1.00),
+    "right_hip_pitch_joint": (-1.00, 2.09),
+    "left_elbow_joint": (0.0, 2.44),
+    "right_elbow_joint": (-2.44, 0.0),
+}
+
+
 def get_spec() -> mujoco.MjSpec:
-    """Asimov for mjlab, see ``unitree.load``."""
-    return unitree.load(ASIMOV_XML, "ankle_roll_link", imu="imu_in_pelvis")
+    """Asimov for mjlab, see ``unitree.load``, with Menlo's joint ranges, painted (see ``painted``)."""
+    spec = unitree.load(ASIMOV_XML, "ankle_roll_link", imu="imu_in_pelvis")
+    for joint, limits in RANGES.items():
+        spec.joint(joint).range = limits
+    painted.apply(spec, "asimov")
+    return spec
 
 
 ASIMOV_MOTORS = tuple(
