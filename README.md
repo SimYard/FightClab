@@ -24,11 +24,7 @@ Models are kept as their makers publish them, each folder with its maker's licen
 | Booster T1 | `assets/robots/t1` | [YanjieZe/GMR](https://github.com/YanjieZe/GMR) `assets/booster_t1` @ `bb1bbe4`, from [BoosterRobotics/booster_assets](https://github.com/BoosterRobotics/booster_assets) | BSD-3-Clause |
 | Menlo Asimov v1 | `assets/robots/asimov` | [menloresearch/asimov-1](https://github.com/menloresearch/asimov-1) `sim-model` @ `f71f3fe` | CERN-OHL-S-2.0 |
 
-Left out: PM01's one-grey STL meshes (its textured meshes replace them) and T800's DAE copies. Converted: the OBJ meshes
-of PM01 and T800, to MuJoCo's binary MSH by `tools/obj_to_msh.py` (same vertices, texture coordinates and normals; they
-render pixel for pixel the same). Added: the colors of R1 and Asimov (`assets/robots/<robot>/painted`), made from
-Unitree's and Menlo's product photos by `tools/paint_meshes.py`. Changed at load time, not in the files: Asimov's hip
-and elbow ranges, to Menlo's actuator table (the MJCF stops hip flexion at 90 degrees, the table allows 120).
+Some meshes are converted to MuJoCo's binary format or repainted by the scripts in `tools/`.
 
 ## License
 
