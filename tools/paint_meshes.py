@@ -7,8 +7,8 @@ separate parts, so these get exact edges); a region's (a test on face centers an
 surface) are found by their walls and filled. Decals (shapes, text, patterns) are drawn into textures projected along
 an axis onto the faces that face it, at 0.125 mm per pixel. Flat open holes are closed with a fan of faces. Rules are
 written for the left side and centered meshes: right-side meshes (``right_*``) are painted mirrored. Writes, per mesh,
-one STL per color plus an OBJ and a PNG per decal group to ~/robot_models/painted/<robot>, and parts.json, which
-``fightclab.robots.painted`` reads.
+a MuJoCo MSH mesh per color and per decal group, with its PNG texture, to assets/robots/<robot>/painted, and
+parts.json, which ``fightclab.robots.painted`` reads.
 """
 
 import fnmatch
@@ -22,7 +22,10 @@ import numpy as np
 import trimesh
 from matplotlib import font_manager
 from matplotlib.path import Path as Polygon
+from obj_to_msh import write_msh  # tools/, on the path when this script runs
 from PIL import Image, ImageDraw, ImageFont
+
+from fightclab.robots import ASSETS
 
 Rgba = tuple[float, float, float, float]
 Box = tuple[tuple[float, float, float], tuple[float, float, float]]
@@ -170,7 +173,7 @@ R1_CHEST: list[Shape] = [
 ]
 ROBOTS: dict[str, dict[str, Any]] = {
     "r1": {
-        "meshes": "robot_models/unitree_mujoco/unitree_robots/r1/meshes",
+        "meshes": "r1/meshes",
         "colors": (
             ("head_pitch_link", LIGHT_GREY),
             ("*_shoulder_pitch_link", NAVY),
@@ -397,22 +400,8 @@ def corner_normals(mesh: trimesh.Trimesh, crease: float = 40.0) -> np.ndarray:
     return out
 
 
-def write_obj(path: Path, vertices: np.ndarray, faces: np.ndarray, uv: np.ndarray, normals: np.ndarray) -> None:
-    """Triangles with a texture coordinate and a normal per corner, as OBJ."""
-    used, index = np.unique(faces, return_inverse=True)
-    lines = [f"v {x:.6f} {y:.6f} {z:.6f}" for x, y, z in vertices[used]]
-    lines += [f"vt {s:.6f} {t:.6f}" for s, t in uv.reshape(-1, 2)]
-    lines += [f"vn {x:.5f} {y:.5f} {z:.5f}" for x, y, z in normals.reshape(-1, 3)]
-    corners = index.reshape(-1, 3) + 1
-    lines += [
-        f"f {a}/{3 * i + 1}/{3 * i + 1} {b}/{3 * i + 2}/{3 * i + 2} {c}/{3 * i + 3}/{3 * i + 3}"
-        for i, (a, b, c) in enumerate(corners)
-    ]
-    path.write_text("\n".join(lines) + "\n")
-
-
 def paint_mesh(path: Path, cfg: dict[str, Any], out: Path) -> list[tuple[str, Rgba, str]]:
-    """Paint one mesh; returns its parts as (OBJ file, white, PNG texture)."""
+    """Paint one mesh; returns its parts as (MSH file, white, PNG texture)."""
     name = path.stem
     mesh = trimesh.load(path, process=True)
     flip = name.startswith("right_")
@@ -455,8 +444,8 @@ def paint_mesh(path: Path, cfg: dict[str, Any], out: Path) -> list[tuple[str, Rg
     def write(stem: str, faces: np.ndarray, uv: np.ndarray, normals: np.ndarray, png: str) -> None:
         if flip:  # restore the winding
             faces, uv, normals = faces[:, [0, 2, 1]], uv[:, [0, 2, 1]], normals[:, [0, 2, 1]]
-        write_obj(out / f"{stem}.obj", vertices, faces, uv, normals)
-        parts.append((f"{stem}.obj", (1.0, 1.0, 1.0, 1.0), png))
+        write_msh(out / f"{stem}.msh", vertices[faces], normals, uv)
+        parts.append((f"{stem}.msh", (1.0, 1.0, 1.0, 1.0), png))
 
     parts: list[tuple[str, Rgba, str]] = []
     textured = np.zeros(len(tri), bool)
@@ -500,12 +489,12 @@ def paint_mesh(path: Path, cfg: dict[str, Any], out: Path) -> list[tuple[str, Rg
 def paint(robot: str) -> None:
     """Paint ``robot``'s meshes as configured in ``ROBOTS`` and write them with parts.json."""
     cfg = ROBOTS[robot]
-    out = Path.home() / "robot_models/painted" / robot
+    out = ASSETS / robot / "painted"
     out.mkdir(parents=True, exist_ok=True)
     for old in out.iterdir():
         old.unlink()
     parts = {}
-    for path in sorted((Path.home() / cfg["meshes"]).glob("*.[Ss][Tt][Ll]")):
+    for path in sorted((ASSETS / cfg["meshes"]).glob("*.[Ss][Tt][Ll]")):
         if "collision" not in path.stem:
             parts[path.stem] = paint_mesh(path, cfg, out)
             print(path.stem, [p[0] for p in parts[path.stem]])

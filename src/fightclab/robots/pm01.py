@@ -1,24 +1,22 @@
 """EngineAI PM01 for FightClab: EngineAI's MJCF with torque-limited motors, see ``engineai``.
 
-The model is ``assets/engineai_pm01/xml/serial_pm_v2.xml`` from GMR, kept outside the repo. PM01 is 1.4 m and 41 kg,
+The model is ``assets/engineai_pm01/xml/serial_pm_v2.xml`` from GMR, in ``assets/robots/pm01``. PM01 is 1.4 m and 41 kg,
 with 24 motors: 6 per leg, waist yaw, 5 per arm, head yaw. Torque limits are 164 and 61 N*m; the speed curves are
 M107-15's (150 N*m) and N7520-14's (71 N*m).
 """
-
-from pathlib import Path
 
 import mujoco
 import numpy as np
 from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
 
-from fightclab.robots import engineai
+from fightclab.robots import ASSETS, engineai
 from fightclab.robots.g1 import STIFF_COLLISION
 
-PM01_XML = Path.home() / "GMR/assets/engineai_pm01/xml/serial_pm_v2.xml"
+PM01_XML = ASSETS / "pm01/xml/serial_pm_v2.xml"
 G1_NAMES = engineai.g1_names(torso="LINK_TORSO_YAW", hand="ELBOW_END")
 
 # EngineAI's textured meshes of the same robot, from github.com/engineai-robotics/engineai_robotics_description.
-PM01_TEXTURED = Path.home() / "robot_models/engineai_robotics_description/pm01_edu"
+PM01_TEXTURED = ASSETS / "pm01/textured"
 
 
 def get_spec() -> mujoco.MjSpec:

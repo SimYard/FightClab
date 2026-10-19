@@ -1,6 +1,6 @@
 """Unitree H2 for FightClab: Unitree's MJCF with Unitree motor curves picked by torque limit.
 
-The model is ``unitree_robots/h2/h2_mujoco.xml`` from unitree_mujoco (see ``unitree.MODELS``). H2 is 1.8 m and
+The model is unitree_mujoco's ``unitree_robots/h2/h2_mujoco.xml``, in ``assets/robots/h2``. H2 is 1.8 m and
 71 kg, with 31 motors: 6 per leg, 3 in the waist, 7 per arm and 2 in the head. Its curves are not published, so each
 joint gets the smallest published Unitree motor whose peak covers the model's torque limit, capped at that limit.
 The legs' 360 N*m is beyond every published motor; they get M107-24's speed curve (H1-2's biggest, 240 N*m) at 1.5x.
@@ -9,11 +9,11 @@ The legs' 360 N*m is beyond every published motor; they get M107-24's speed curv
 import mujoco
 from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
 
-from fightclab.robots import unitree
+from fightclab.robots import ASSETS, unitree
 from fightclab.robots.g1 import STIFF_COLLISION
 from fightclab.robots.unitree import M107_24, motor_for
 
-H2_XML = unitree.MODELS / "h2/h2_mujoco.xml"
+H2_XML = ASSETS / "h2/h2_mujoco.xml"
 
 
 def get_spec() -> mujoco.MjSpec:

@@ -8,9 +8,6 @@ from mjlab.asset_zoo.robots.unitree_g1 import g1_constants as g1
 
 from fightclab.robots.g1 import N5020_16, N7520_14, N7520_22, Motor, unitree_motor
 
-# unitree_mujoco (github.com/unitreerobotics/unitree_mujoco, BSD-3) is kept outside the repo, as a sparse clone.
-MODELS = Path.home() / "robot_models/unitree_mujoco/unitree_robots"
-
 # Unitree's bigger published motors (unitree_rl_lab, assets/robots/unitree_actuators.py), from H1-2.
 M107_15 = Motor(y1=150.0, x1=14.0, x2=25.6, fs=0.0, fd=0.0)
 M107_24 = Motor(y1=240.0, x1=8.8, x2=16.0, fs=0.0, fd=0.0)

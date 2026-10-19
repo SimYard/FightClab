@@ -1,20 +1,18 @@
 """EngineAI T800 for FightClab: EngineAI's MJCF with torque-limited motors, see ``engineai``.
 
 The model is ``assets/engineai_t800/xml/serial_t800.xml`` from EngineAI's GMR fork (github.com/engineai-robotics/GMR),
-kept outside the repo in ~/robot_models/engineai_gmr. T800 is 1.7 m and 85 kg, with 25 motors: 6 per leg, torso yaw,
+in ``assets/robots/t800``. T800 is 1.7 m and 85 kg, with 25 motors: 6 per leg, torso yaw,
 5 per arm, 2 in the head. Torque limits and reflected inertia are the model's; speed curves are the nearest Unitree
 motor's: M107-24 (240 N*m) for 222-415 N*m, M107-15 (150 N*m) for 160, N7520-14 (71 N*m) for 52.
 """
 
-from pathlib import Path
-
 import mujoco
 from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
 
-from fightclab.robots import engineai
+from fightclab.robots import ASSETS, engineai
 from fightclab.robots.g1 import STIFF_COLLISION
 
-T800_XML = Path.home() / "robot_models/engineai_gmr/assets/engineai_t800/xml/serial_t800.xml"
+T800_XML = ASSETS / "t800/xml/serial_t800.xml"
 G1_NAMES = engineai.g1_names(torso="LINK_WAIST_YAW", hand="WRIST_END")
 
 

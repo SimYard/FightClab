@@ -9,6 +9,7 @@ dependencies = [
   "scipy>=1.18.1"
 ]
 description = "Arena for humanoid robot fights in mjlab: rules, physical damage, self-play"
+license = "Apache-2.0"
 name = "fightclab"
 readme = "README.md"
 requires-python = ">=3.13"

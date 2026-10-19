@@ -21,7 +21,7 @@ from general_motion_retargeting import GeneralMotionRetargeting, params
 from general_motion_retargeting.utils.smpl import get_gvhmr_data_offline_fast, load_gvhmr_pred_file
 
 GMR = pathlib.Path.home() / "GMR"
-UNITREE = pathlib.Path.home() / "robot_models/unitree_mujoco/unitree_robots"
+ASSETS = pathlib.Path(__file__).resolve().parents[1] / "assets/robots"  # run in GMR's venv, without fightclab
 
 
 @dataclass(frozen=True)
@@ -49,7 +49,7 @@ class Extra:
 EXTRAS = {
     # Unitree parks R1's placeholders at z = 20 m so the SDK sees 29 joints; R1 has no waist pitch or wrist pitch/yaw.
     "r1": Extra(
-        UNITREE / "r1/R1_C++.xml",
+        ASSETS / "r1/R1_C++.xml",
         "ankle_roll_link",
         (0.095, 0.0, -0.035),
         {"legs": 0.91, "arms": 1.10, "trunk": 0.84},  # 0.599, 0.256, 0.246 m
@@ -57,15 +57,14 @@ EXTRAS = {
         placeholders=("waist_pitch", "left_wrist_pitch", "left_wrist_yaw", "right_wrist_pitch", "right_wrist_yaw"),
     ),
     "h2": Extra(
-        UNITREE / "h2/h2_mujoco.xml",
+        ASSETS / "h2/h2_mujoco.xml",
         "ankle_pitch_link",
         (0.13, 0.036, -0.04),
         {"legs": 1.43, "arms": 1.34, "trunk": 1.65},  # 0.938, 0.312, 0.483 m
         straight_hips=True,
     ),
-    # Asimov's model is copyleft: it stays in ~/robot_models, outside the repo.
     "asimov": Extra(
-        pathlib.Path.home() / "robot_models/asimov-1/sim-model/xmls/asimov_1.xml",
+        ASSETS / "asimov/xmls/asimov_1.xml",
         "ankle_roll_link",
         (0.102, 0.0, -0.019),
         {"legs": 0.84, "arms": 1.36, "trunk": 1.15},  # 0.554, 0.317, 0.336 m
@@ -120,10 +119,9 @@ def ik_config(e: Extra, name: str) -> pathlib.Path:
 robot, pred_file, out = sys.argv[1], sys.argv[2], sys.argv[3]
 native = {"g1": "unitree_g1", "pm01": "engineai_pm01", "t800": "engineai_t800", "t1": "booster_t1"}
 target = native.get(robot, f"fightclab_{robot}")
-if robot == "t800":  # in EngineAI's GMR fork (github.com/engineai-robotics/GMR, sparse clone), not in GMR
-    fork = pathlib.Path.home() / "robot_models/engineai_gmr"
-    params.ROBOT_XML_DICT[target] = fork / "assets/engineai_t800/t800_mocap.xml"
-    params.IK_CONFIG_DICT["smplx"][target] = fork / "general_motion_retargeting/ik_configs/smplx_to_t800.json"
+if robot == "t800":  # from EngineAI's GMR fork (github.com/engineai-robotics/GMR), not in GMR
+    params.ROBOT_XML_DICT[target] = ASSETS / "t800/t800_mocap.xml"
+    params.IK_CONFIG_DICT["smplx"][target] = ASSETS / "t800/smplx_to_t800.json"
     params.ROBOT_BASE_DICT[target] = "LINK_BASE"
     params.VIEWER_CAM_DISTANCE_DICT[target] = 2.0
 if robot in EXTRAS:

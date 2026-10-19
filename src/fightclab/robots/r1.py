@@ -1,6 +1,6 @@
 """Unitree R1 for FightClab: Unitree's MJCF without its placeholder joints, with Unitree motor curves.
 
-The model is ``unitree_robots/r1/R1_C++.xml`` from unitree_mujoco (see ``unitree.MODELS``).
+The model is unitree_mujoco's ``unitree_robots/r1/R1_C++.xml``, in ``assets/robots/r1``.
 R1 has 24 motors: 6 per leg, waist roll and yaw, 5 per arm. Its per-joint torque limits (88, 139, 50 and 25 N*m) are
 those of G1's motors, so G1's Unitree curves are reused by torque class; R1's own curves are not published.
 """
@@ -9,10 +9,10 @@ import mujoco
 from mjlab.asset_zoo.robots.unitree_g1 import g1_constants as g1
 from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
 
-from fightclab.robots import painted, unitree
+from fightclab.robots import ASSETS, painted, unitree
 from fightclab.robots.g1 import N5020_16, N7520_14, N7520_22, STIFF_COLLISION, unitree_motor
 
-R1_XML = unitree.MODELS / "r1/R1_C++.xml"
+R1_XML = ASSETS / "r1/R1_C++.xml"
 # Unitree parks these at z = 20 m, unattached, so the SDK sees 29 joints; R1 has no waist pitch or wrist pitch/yaw.
 PLACEHOLDERS = ("waist_pitch", "left_wrist_pitch", "left_wrist_yaw", "right_wrist_pitch", "right_wrist_yaw")
 
