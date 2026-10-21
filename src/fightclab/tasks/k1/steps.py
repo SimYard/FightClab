@@ -24,9 +24,9 @@ from numpy.typing import NDArray
 from scipy.signal import savgol_filter
 from scipy.spatial.transform import Rotation
 
-from fightclab.tasks.helicopter_kick.video_motion import ROBOTS, _lowest, contacts, leg_chains, reach
+from fightclab.tasks.helicopter_kick.video_motion import ROBOTS, _lowest, leg_chains, reach
 from fightclab.tasks.k1.footwork import OPPONENT_YAW, STANCE
-from fightclab.tasks.k1.footwork_motion import FPS, GUARD_POSE, heading
+from fightclab.tasks.k1.footwork_motion import FPS, GUARD_POSE
 
 ROBOT = ROBOTS["t800"]
 HEIGHT = 1.75  # m, T800 standing
@@ -59,36 +59,15 @@ class Stance:
     """rad, the rear foot's turn from the heading."""
 
 
-def stance(reference: NDArray[np.float64]) -> Stance:
-    """The clips' still frames (both feet planted, pelvis slower than 5 cm/s) at their median, at the coach's width."""
-    pos, _, planted = contacts(reference, ROBOT)
-    yaw = np.unwrap(heading(reference[:, 3:7]))
-    speed = np.linalg.norm(np.gradient(reference[:, :2], axis=0), axis=1) * FPS
-    still = planted.all(0) & (speed < 0.05)  # noqa: PLR2004
-    c, s = np.cos(yaw[still]), np.sin(yaw[still])
-
-    def heading_frame(v: NDArray[np.float64]) -> NDArray[np.float64]:
-        return np.stack((c * v[:, 0] + s * v[:, 1], -s * v[:, 0] + c * v[:, 1]), -1)
-
-    feet = np.stack([np.median(heading_frame(pos[f, still, :2] - reference[still, :2]), 0) for f in range(2)])
-    mid = feet.mean(0)
-    m = ROBOT.spec().compile()
-    d = mujoco.MjData(m)
-    adr = np.array([m.jnt_qposadr[m.joint(n).id] for n in ROBOT.joints])
-    rear = m.body(ROBOT.feet[1]).id
-    rear_yaw = []
-    for i in np.flatnonzero(still)[::10]:
-        r = reference[i]
-        d.qpos[:3], d.qpos[3:7], d.qpos[adr] = r[:3], r[[6, 3, 4, 5]], r[7:]
-        mujoco.mj_kinematics(m, d)
-        rear_yaw.append(Rotation.from_quat(d.xquat[rear][[1, 2, 3, 0]]).as_euler("ZYX")[0] - yaw[i])
-    return Stance(
-        feet=(feet - mid) * (STANCE_WIDTH / np.linalg.norm(feet[0] - feet[1])),
-        pelvis=-mid,
-        height=float(np.median(reference[still, 2])),
-        pitch=float(np.median(Rotation.from_quat(reference[still, 3:7]).as_euler("ZYX")[:, 1])),
-        rear_yaw=float(np.median(np.angle(np.exp(1j * np.array(rear_yaw))))),
-    )
+# The footwork clips' still frames (both feet planted, pelvis slower than 5 cm/s) at their median, the feet spread to
+# STANCE_WIDTH. Measured once from the cleaned clips (``footwork_motion``), which are not in the repo.
+CLIP_STANCE = Stance(
+    feet=np.array(((0.09678666041367329, 0.22507186044898703), (-0.09678666041367329, -0.22507186044898703))),
+    pelvis=np.array((0.03891281486309335, -0.012186716368568815)),
+    height=0.994756,
+    pitch=0.13029068303122204,
+    rear_yaw=-0.11917156659851422,
+)
 
 
 def plan(commands: list[tuple[str, float]], st: Stance) -> tuple[NDArray[np.float64], NDArray[np.float64], list[str]]:
@@ -137,9 +116,8 @@ def plan(commands: list[tuple[str, float]], st: Stance) -> tuple[NDArray[np.floa
     return np.array(pos).transpose(1, 0, 2), np.array(lift).T, labels
 
 
-def build(commands: list[tuple[str, float]], reference: NDArray[np.float64]) -> tuple[NDArray[np.float64], list[str]]:
+def build(commands: list[tuple[str, float]], st: Stance = CLIP_STANCE) -> tuple[NDArray[np.float64], list[str]]:
     """The motion's rows (30 fps: root pos, quat xyzw, joints) and each row's command."""
-    st = stance(reference)
     feet, lift, labels = plan(commands, st)
     m = ROBOT.spec().compile()
     d = mujoco.MjData(m)
@@ -196,8 +174,7 @@ if __name__ == "__main__":
         commands = random_commands(float(args[0].split(":")[1]))
     else:
         commands = [(a.split(":")[0], float(a.split(":")[1])) for a in args]
-    reference = np.loadtxt(Path.home() / "fw_clips/footwork_t800.csv", delimiter=",")
-    rows, labels = build(commands, reference)
+    rows, labels = build(commands)
     np.savetxt(out, rows, delimiter=",", fmt="%.6f")
     out.with_suffix(".labels.txt").write_text("\n".join(labels))
     print(f"{len(rows) / FPS:.1f} s -> {out}")

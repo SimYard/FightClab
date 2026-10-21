@@ -35,7 +35,8 @@ from fightclab.tasks.k1.footwork import still_head_action_scale, t800_footwork_e
 MOTION_T800 = Path(__file__).parent / "k1_t800.npz"
 # Generated K-1 step-drags on random commands (``steps ... random:600``, then ``motion_npz``), on the stance of the
 # footwork clips joined by ``footwork_motion``: the clips themselves brought lunges, rocking and hanging feet.
-# ponytail: kept outside the repo with the clips (~40 MB); ship it, or the generator's inputs, when others train.
+# Not in the repo (56 MB): ``python -m fightclab.tasks.k1.steps ~/fw_clips/steps_t800.csv random:600``, then
+# ``motion_npz t800`` it to this path.
 MOTION_FOOTWORK_T800 = Path.home() / "fw_clips" / "steps_t800.npz"
 
 
