@@ -7,6 +7,7 @@ the speed curve of the Unitree motor nearest in peak torque.
 from pathlib import Path
 
 import mujoco
+import numpy as np
 from mjlab.actuator import DcMotorActuatorCfg
 
 from fightclab.robots import unitree
@@ -34,6 +35,8 @@ def load(xml: Path, textured: Path | None = None) -> mujoco.MjSpec:
             geom.material = name
         # The texture's own colors, not tinted by the model's grey; untextured parts are black in EngineAI's CAD.
         geom.rgba = (1, 1, 1, 1) if geom.material else (0.03, 0.03, 0.03, 1)
+    for mesh in spec.meshes:
+        two_sided(mesh, xml.parent / mesh.file)
     for element in [*spec.actuators, *spec.sensors]:  # mjlab adds its own motors
         spec.delete(element)
     for body in spec.bodies:
@@ -45,6 +48,24 @@ def load(xml: Path, textured: Path | None = None) -> mujoco.MjSpec:
     spec.add_sensor(name="imu_ang_vel", type=mujoco.mjtSensor.mjSENS_GYRO, objtype=site, objname="imu")
     spec.add_sensor(name="imu_lin_vel", type=mujoco.mjtSensor.mjSENS_VELOCIMETER, objtype=site, objname="imu")
     return spec
+
+
+def two_sided(mesh: mujoco.MjsMesh, msh: Path) -> None:
+    """``mesh`` drawn from both sides: its MSH file's faces, and each again wound the other way with flipped normals.
+
+    EngineAI's CAD parts are open shells, T800's with hundreds to thousands of open edges per part. MuJoCo draws front
+    faces only, so the backs of those shells showed as holes, through the heels and shins.
+    """
+    nv, nn, nt, nf = np.fromfile(msh, "<i4", 4)
+    assert nv == nn == nt, f"{msh}: one normal and texture coordinate per vertex, as tools/obj_to_msh.py writes"
+    data = np.fromfile(msh, "<f4", 8 * nv, offset=16)
+    v, n, uv = data[: 3 * nv].reshape(-1, 3), data[3 * nv : 6 * nv].reshape(-1, 3), data[6 * nv :].reshape(-1, 2)
+    faces = np.fromfile(msh, "<i4", 3 * nf, offset=16 + 32 * nv).reshape(-1, 3)
+    mesh.file = ""
+    mesh.uservert = np.r_[v, v].ravel()
+    mesh.usernormal = np.r_[n, -n].ravel()
+    mesh.usertexcoord = np.r_[uv, uv].ravel()
+    mesh.userface = np.r_[faces, faces[:, ::-1] + nv].ravel()
 
 
 def motor(names: tuple[str, ...], limit: float, armature: float) -> DcMotorActuatorCfg:
