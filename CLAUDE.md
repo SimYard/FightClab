@@ -38,6 +38,8 @@ The layout follows the user's template [AlexanderRex/project_template](https://g
 - no `defaults.cfg`;
 - GPU is set up in the main `docker/docker-compose.yml`, so there is no `run-nvidia.sh`.
 
+`.claude/agents/` holds style coaches (`boxing-coach`, `k1-coach`): give them rendered frames or recorded attempts; they say what is wrong and turn it into measurable checks. One coach per style; add one when a style's techniques are trained. Each coach judges everything by its own style; where they disagree, we choose which checks a robot trains on. `humanoid-rl` reviews training setups instead (configs, rewards, curricula, motion references, logs, metrics) and answers with problems and checks.
+
 `docker/run.sh [--build] [cmd...]` runs `cmd` in the container, or opens a shell if no command is given. The repo is mounted at `/home/dev/fightclab`. The venv lives in the image at `/home/dev/venv`. The container user `dev` has uid 1000, the same as the host user.
 
 ## Environment

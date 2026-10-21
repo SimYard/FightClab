@@ -84,6 +84,39 @@ EXTRAS = {
 }
 
 
+def t800_mocap() -> pathlib.Path:
+    """EngineAI's T800 mocap model on our copies of its meshes, which assets/robots stores as binary MSH."""
+    root = ASSETS / "t800"
+    spec = mujoco.MjSpec.from_file(str(root / "t800_mocap.xml"))
+    spec.meshdir = spec.texturedir = ""
+    for mesh in spec.meshes:
+        mesh.file = str(root / "meshes" / f"{pathlib.Path(mesh.file).stem}.msh")
+    for texture in spec.textures:
+        if texture.file:
+            texture.file = str(root / "texture" / pathlib.Path(texture.file).name)
+    out = pathlib.Path(tempfile.gettempdir()) / "t800_mocap.xml"
+    out.write_text(spec.to_xml())
+    return out
+
+
+def t800_ik_config() -> pathlib.Path:
+    """EngineAI's T800 IK config with the ankles matched to the person's ankles.
+
+    It matched them to SMPL-X's ``*_foot`` joints, the balls of the feet. With the toes turned out, as in a fighting
+    stance, those are ~0.15 m farther apart than the ankles, and T800 stood that much wider than the person.
+    """
+    cfg = json.loads((ASSETS / "t800/smplx_to_t800.json").read_text())
+    for table in ("ik_match_table1", "ik_match_table2"):
+        for side, body in (("left", "LINK_ANKLE_ROLL_L"), ("right", "LINK_ANKLE_ROLL_R")):
+            cfg[table][body][0] = f"{side}_ankle"
+            cfg[table][body][3] = [0.0, 0.0, 0.0]
+    for side in ("left", "right"):
+        cfg["human_scale_table"][f"{side}_ankle"] = cfg["human_scale_table"].pop(f"{side}_foot")
+    out = pathlib.Path(tempfile.gettempdir()) / "smplx_to_t800.json"
+    out.write_text(json.dumps(cfg))
+    return out
+
+
 def mocap(e: Extra, name: str) -> pathlib.Path:
     """The robot for GMR: without placeholder bodies, with toe bodies where G1's mocap model has them."""
     spec = mujoco.MjSpec.from_file(str(e.xml))
@@ -131,8 +164,8 @@ robot, pred_file, out = sys.argv[1], sys.argv[2], sys.argv[3]
 native = {"g1": "unitree_g1", "pm01": "engineai_pm01", "t800": "engineai_t800", "t1": "booster_t1"}
 target = native.get(robot, f"fightclab_{robot}")
 if robot == "t800":  # from EngineAI's GMR fork (github.com/engineai-robotics/GMR), not in GMR
-    params.ROBOT_XML_DICT[target] = ASSETS / "t800/t800_mocap.xml"
-    params.IK_CONFIG_DICT["smplx"][target] = ASSETS / "t800/smplx_to_t800.json"
+    params.ROBOT_XML_DICT[target] = t800_mocap()
+    params.IK_CONFIG_DICT["smplx"][target] = t800_ik_config()
     params.ROBOT_BASE_DICT[target] = "LINK_BASE"
     params.VIEWER_CAM_DISTANCE_DICT[target] = 2.0
 if robot in EXTRAS:
