@@ -8,7 +8,8 @@ An arena for humanoid robot fights, built on [mjlab](https://github.com/mujocola
 - **Damage is physical.** Hits and falls weaken the joints they land on, and motors overheat.
 - **Reward** = clean hits on the opponent minus damage to yourself.
 
-Status: early. The robots below have learned a jumping spin kick from a video; fights come next.
+Status: early. The robots below have learned a jumping spin kick from a video, and T800 K-1 footwork on command;
+fights come next.
 
 ## Robots
 

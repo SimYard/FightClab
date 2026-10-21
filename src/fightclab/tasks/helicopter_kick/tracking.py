@@ -35,6 +35,7 @@ from fightclab.tasks.helicopter_kick.video_motion import ROBOTS, phases
 if TYPE_CHECKING:
     from mjlab.entity import EntityCfg
     from mjlab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg
+    from mjlab.managers.scene_entity_config import SceneEntityCfg
 
 # The kick from a Ginger Ninja tutorial clip, made by video_motion.py and motion_npz.py (see their docstrings).
 # The keyframe version from reference.py is helicopter_kick.npz; it looks stiffer than the person.
@@ -113,6 +114,17 @@ def feet_height(env: ManagerBasedRlEnv, command_name: str, body_names: tuple[str
     feet = [motion.cfg.body_names.index(name) for name in body_names]
     error = motion.body_pos_relative_w[:, feet, 2] - motion.robot_body_pos_w[:, feet, 2]
     return torch.exp(-(error**2) / std**2).mean(dim=-1)
+
+
+def feet_contact_slip(env: ManagerBasedRlEnv, sensor_name: str, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+    """Squared floor speed of the feet touching the floor, summed.
+
+    Tracking pays for where a foot is, not how it got there: T800's footwork slid its following foot up to 9 cm per
+    step along the floor before lifting it (the reference: 0.2 cm). A heel rising on the ball barely moves the foot.
+    """
+    feet = env.scene[asset_cfg.name].data.body_link_lin_vel_w[:, asset_cfg.body_ids, :2]
+    touching = env.scene[sensor_name].data.found > 0
+    return (feet.square().sum(dim=-1) * touching).sum(dim=-1)
 
 
 def bad_anchor_heading(env: ManagerBasedRlEnv, command_name: str, threshold: float) -> torch.Tensor:
