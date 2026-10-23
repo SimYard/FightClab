@@ -45,7 +45,7 @@ class AirborneHeightGain:
         self.start = torch.where(self.fresh, z, self.start)
         self.best = torch.where(self.fresh, z, self.best)
         self.fresh[:] = False
-        airborne = kick_mdp._airborne(env, sensor_name)
+        airborne = kick_mdp.in_air(env, sensor_name)
         gain = torch.where(airborne, (z - self.best).clamp(min=0.0), torch.zeros_like(z))
         self.best = torch.where(airborne, torch.maximum(self.best, z), self.best)
         rise = self.best - self.start

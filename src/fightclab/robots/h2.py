@@ -7,10 +7,10 @@ The legs' 360 N*m is beyond every published motor; they get M107-24's speed curv
 """
 
 import mujoco
-from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
+from mjlab.entity import EntityCfg
 
 from fightclab.robots import ASSETS, unitree
-from fightclab.robots.g1 import STIFF_COLLISION
+from fightclab.robots.common import action_scale, entity_cfg
 from fightclab.robots.unitree import M107_24, motor_for
 
 H2_XML = ASSETS / "h2/h2_mujoco.xml"
@@ -33,11 +33,7 @@ H2_MOTORS = (
     motor_for((".*_wrist_pitch_joint", ".*_wrist_yaw_joint"), 10),
     motor_for(("head_.*_joint",), 50),
 )
-
-# mjlab's G1 rule: an action of 1 moves the target by a quarter of the peak torque's worth of stiffness.
-H2_ACTION_SCALE = {
-    name: 0.25 * motor.effort_limit / motor.stiffness for motor in H2_MOTORS for name in motor.target_names_expr
-}
+H2_ACTION_SCALE = action_scale(H2_MOTORS)
 
 KNEES_BENT = EntityCfg.InitialStateCfg(
     pos=(0, 0, 1.0),  # standing straight, the pelvis is at 1.04 m
@@ -47,10 +43,5 @@ KNEES_BENT = EntityCfg.InitialStateCfg(
 
 
 def get_h2_cfg() -> EntityCfg:
-    """H2 with all collisions on (self-collisions too), stiff contacts as on our G1, Unitree motor curves."""
-    return EntityCfg(
-        init_state=KNEES_BENT,
-        collisions=(STIFF_COLLISION,),
-        spec_fn=get_spec,
-        articulation=EntityArticulationInfoCfg(actuators=H2_MOTORS, soft_joint_pos_limit_factor=0.9),
-    )
+    """H2 with Unitree motor curves, see ``entity_cfg``."""
+    return entity_cfg(get_spec, H2_MOTORS, KNEES_BENT)

@@ -18,13 +18,12 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-import mujoco
 import numpy as np
 from numpy.typing import NDArray
 from scipy.signal import savgol_filter
 from scipy.spatial.transform import Rotation
 
-from fightclab.tasks.helicopter_kick.video_motion import ROBOTS, _lowest, leg_chains, reach
+from fightclab.motion import ROBOTS, leg_chains, lowest, model, reach, set_pose, soles
 from fightclab.tasks.k1.footwork import OPPONENT_YAW, STANCE
 from fightclab.tasks.k1.footwork_motion import FPS, GUARD_POSE
 
@@ -119,12 +118,9 @@ def plan(commands: list[tuple[str, float]], st: Stance) -> tuple[NDArray[np.floa
 def build(commands: list[tuple[str, float]], st: Stance = CLIP_STANCE) -> tuple[NDArray[np.float64], list[str]]:
     """The motion's rows (30 fps: root pos, quat xyzw, joints) and each row's command."""
     feet, lift, labels = plan(commands, st)
-    m = ROBOT.spec().compile()
-    d = mujoco.MjData(m)
-    adr = np.array([m.jnt_qposadr[m.joint(n).id] for n in ROBOT.joints])
+    m, d, adr = model(ROBOT)
     legs = leg_chains(m, ROBOT)
-    shapes = (mujoco.mjtGeom.mjGEOM_SPHERE, mujoco.mjtGeom.mjGEOM_CAPSULE, mujoco.mjtGeom.mjGEOM_BOX)
-    soles = [[g for g in range(m.ngeom) if m.geom_bodyid[g] == leg[0] and m.geom_type[g] in shapes] for leg in legs]
+    sole = soles(m, ROBOT)
     # The lead toe out from the opponent's line, the rear foot as in the clips with its heel up.
     turns = [Rotation.from_euler("Z", OPPONENT_YAW + LEAD_TOE_OUT), Rotation.from_euler("ZY", (st.rear_yaw, REAR_HEEL))]
     rows = np.zeros((feet.shape[1], 7 + len(adr)))
@@ -135,16 +131,15 @@ def build(commands: list[tuple[str, float]], st: Stance = CLIP_STANCE) -> tuple[
     joints = np.array([GUARD_POSE.get(n, STANCE[n]) for n in ROBOT.joints])
     # Each foot body's height with its sole on the floor, turned as it will be: the feet are put down on the first
     # frame, turned, and measured.
-    d.qpos[:3], d.qpos[3:7], d.qpos[adr] = rows[0, :3], rows[0, [6, 3, 4, 5]], joints
-    mujoco.mj_kinematics(m, d)
-    floor = [d.xpos[leg[0]][2] - min(_lowest(m, d, g) for g in soles[f]) - PELVIS_DROP for f, leg in enumerate(legs)]
+    set_pose(m, d, adr, rows[0], joints)
+    floor = [d.xpos[leg[0]][2] - lowest(m, d, sole[f]) - PELVIS_DROP for f, leg in enumerate(legs)]
     for _ in range(5):
         for f, leg in enumerate(legs):
             reach(m, d, leg, np.r_[feet[f, 0], floor[f]], turns[f])
-    floor = [d.xpos[leg[0]][2] - min(_lowest(m, d, g) for g in soles[f]) for f, leg in enumerate(legs)]
+    floor = [d.xpos[leg[0]][2] - lowest(m, d, sole[f]) for f, leg in enumerate(legs)]
     joints = d.qpos[adr].copy()
     for i in range(len(rows)):
-        d.qpos[:3], d.qpos[3:7], d.qpos[adr] = rows[i, :3], rows[i, [6, 3, 4, 5]], joints
+        set_pose(m, d, adr, rows[i], joints)
         for _ in range(5 if i == 0 else 1):  # the first frame converges from the clips' pose
             for f, leg in enumerate(legs):
                 reach(m, d, leg, np.r_[feet[f, i], floor[f] + lift[f, i]], turns[f])

@@ -25,12 +25,9 @@ from mjlab.tasks.velocity.mdp.rewards import body_angular_velocity_penalty
 from mjlab.tasks.velocity.rl import VelocityOnPolicyRunner
 
 from fightclab.tasks.helicopter_kick.env_cfg import FEET
-from fightclab.tasks.helicopter_kick.tracking import (
-    feet_contact_slip,
-    ppo_runner_cfg,
-    t800_helicopter_kick_tracking_env_cfg,
-)
+from fightclab.tasks.helicopter_kick.tracking import helicopter_kick_tracking_env_cfg, ppo_runner_cfg
 from fightclab.tasks.k1.footwork import still_head_action_scale, t800_footwork_env_cfg, t800_footwork_ppo_runner_cfg
+from fightclab.tracking import feet_contact_slip
 
 MOTION_T800 = Path(__file__).parent / "k1_t800.npz"
 # Generated K-1 step-drags on random commands (``steps ... random:600``, then ``motion_npz``), on the stance of the
@@ -42,7 +39,7 @@ MOTION_FOOTWORK_T800 = Path.home() / "fw_clips" / "steps_t800.npz"
 
 def t800_k1_tracking_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     """T800 on the K-1 clip."""
-    cfg = t800_helicopter_kick_tracking_env_cfg(play)
+    cfg = helicopter_kick_tracking_env_cfg("t800", play)
     cfg.commands["motion"].motion_file = str(MOTION_T800)
     del cfg.rewards["flight"]
     return cfg

@@ -1,16 +1,13 @@
 """EngineAI's MJCF models (from GMR and EngineAI's GMR fork) prepared for mjlab, with torque-limited motors.
 
 EngineAI publishes torque limits and reflected inertia in its models but no torque-speed curves, so each motor gets
-the speed curve of the Unitree motor nearest in peak torque.
+the speed curve of the Unitree motor nearest in peak torque (``unitree.nearest``).
 """
 
 from pathlib import Path
 
 import mujoco
 import numpy as np
-from mjlab.actuator import DcMotorActuatorCfg
-
-from fightclab.robots import unitree
 
 
 def load(xml: Path, textured: Path | None = None) -> mujoco.MjSpec:
@@ -66,11 +63,6 @@ def two_sided(mesh: mujoco.MjsMesh, msh: Path) -> None:
     mesh.usernormal = np.r_[n, -n].ravel()
     mesh.usertexcoord = np.r_[uv, uv].ravel()
     mesh.userface = np.r_[faces, faces[:, ::-1] + nv].ravel()
-
-
-def motor(names: tuple[str, ...], limit: float, armature: float) -> DcMotorActuatorCfg:
-    """The model's torque limit and reflected inertia, the speed curve of the Unitree motor nearest in torque."""
-    return unitree.nearest(names, limit, armature)
 
 
 def g1_names(torso: str, hand: str) -> dict[str, str]:

@@ -93,7 +93,7 @@ class KickProgress(CommandTerm):
             step = self.cfg.direction * self.robot.data.root_link_ang_vel_w[:, 2] * self._env.step_dt
             self.yaw += step
             self.best = torch.maximum(self.best, self.yaw)
-            airborne = _airborne(self._env, self.cfg.sensor_name)
+            airborne = in_air(self._env, self.cfg.sensor_name)
             self.flights += (airborne & ~self.was_airborne).long()
             self.was_airborne = airborne
             first_flight = airborne & (self.flights == 1)
@@ -135,7 +135,8 @@ def _feet_down(env: ManagerBasedRlEnv, sensor_name: str) -> torch.Tensor:
     return sensor.data.found > 0
 
 
-def _airborne(env: ManagerBasedRlEnv, sensor_name: str) -> torch.Tensor:
+def in_air(env: ManagerBasedRlEnv, sensor_name: str) -> torch.Tensor:
+    """True where both feet are off the floor (the feet's contact sensor ``sensor_name``, see ``env_cfg.FEET``)."""
     return (~_feet_down(env, sensor_name)).all(dim=-1)
 
 
@@ -147,7 +148,7 @@ def _leg_lift(robot: Entity, site_ids: list[int] | slice, leg_length: float) -> 
 
 def _first_flight(env: ManagerBasedRlEnv, sensor_name: str) -> torch.Tensor:
     """1 while in the air during the first jump of the episode."""
-    return (_airborne(env, sensor_name) & (_progress(env).flights <= 1)).float()
+    return (in_air(env, sensor_name) & (_progress(env).flights <= 1)).float()
 
 
 def base_height(env: ManagerBasedRlEnv) -> torch.Tensor:
@@ -167,7 +168,7 @@ def spin(env: ManagerBasedRlEnv, sensor_name: str, ground_scale: float = 0.2, tu
     yaw = progress.yaw + progress.cfg.direction * robot.data.root_link_ang_vel_w[:, 2] * env.step_dt
     best = torch.maximum(progress.best, yaw).clamp(max=turns * TURN)
     gain = (best - progress.best).clamp(min=0.0) / env.step_dt
-    airborne = _airborne(env, sensor_name).float()
+    airborne = in_air(env, sensor_name).float()
     return gain * (ground_scale + (1.0 - ground_scale) * airborne)
 
 
