@@ -25,7 +25,8 @@ An arena for humanoid robot fights in [mjlab](https://github.com/mujocolab/mjlab
 
   Without a skill prior, self-play degenerates into pushing.
 
-**Next step:** task `Fightclab-Duel-G1`, a ring with two G1s facing each other.
+**Next step:** task `Fightclab-Duel-G1`, a ring with two G1s facing each other. The first duel skills (a jab and its
+defense, on T800): research, coach checks and plan in `docs/duel.md`.
 - mjlab discovers external tasks through the entry point group `mjlab.tasks`: add `[project.entry-points."mjlab.tasks"]` to `pyproject.toml` and call `register_mjlab_task` (see `~/mjlab/src/mjlab/tasks/registry.py`).
 - rsl_rl is single-agent, so the two-robot and self-play code is ours to write.
 
