@@ -7,10 +7,11 @@ motor's: M107-24 (240 N*m) for 222-415 N*m, M107-15 (150 N*m) for 160, N7520-14 
 """
 
 import mujoco
-from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
+from mjlab.entity import EntityCfg
 
 from fightclab.robots import ASSETS, engineai
-from fightclab.robots.g1 import STIFF_COLLISION
+from fightclab.robots.common import action_scale, entity_cfg
+from fightclab.robots.unitree import nearest
 
 T800_XML = ASSETS / "t800/xml/serial_t800.xml"
 G1_NAMES = engineai.g1_names(torso="LINK_WAIST_YAW", hand="WRIST_END")
@@ -22,17 +23,13 @@ def get_spec() -> mujoco.MjSpec:
 
 
 T800_MOTORS = (
-    engineai.motor(("J0[03]_.*", "J0[69]_.*"), 415, 0.243),  # hip pitch, knee
-    engineai.motor(("J0[17]_.*",), 370, 0.141),  # hip roll
-    engineai.motor(("J0[28]_.*", "J12_.*"), 222, 0.045),  # hip yaw, torso yaw
-    engineai.motor(("J0[45]_.*", "J1[01]_.*", "J1[3-6]_.*", "J(18|19|20|21)_.*"), 160, 0.035),  # ankles, arms
-    engineai.motor(("J1[7]_.*", "J2[2-4]_.*"), 52, 0.007),  # elbow yaw, head
+    nearest(("J0[03]_.*", "J0[69]_.*"), 415, 0.243),  # hip pitch, knee
+    nearest(("J0[17]_.*",), 370, 0.141),  # hip roll
+    nearest(("J0[28]_.*", "J12_.*"), 222, 0.045),  # hip yaw, torso yaw
+    nearest(("J0[45]_.*", "J1[01]_.*", "J1[3-6]_.*", "J(18|19|20|21)_.*"), 160, 0.035),  # ankles, arms
+    nearest(("J1[7]_.*", "J2[2-4]_.*"), 52, 0.007),  # elbow yaw, head
 )
-
-# mjlab's G1 rule: an action of 1 moves the target by a quarter of the peak torque's worth of stiffness.
-T800_ACTION_SCALE = {
-    name: 0.25 * motor.effort_limit / motor.stiffness for motor in T800_MOTORS for name in motor.target_names_expr
-}
+T800_ACTION_SCALE = action_scale(T800_MOTORS)
 
 KNEES_BENT = EntityCfg.InitialStateCfg(
     pos=(0, 0, 1.0),
@@ -42,10 +39,5 @@ KNEES_BENT = EntityCfg.InitialStateCfg(
 
 
 def get_t800_cfg() -> EntityCfg:
-    """T800 with all collisions on (self-collisions too), stiff contacts as on our G1."""
-    return EntityCfg(
-        init_state=KNEES_BENT,
-        collisions=(STIFF_COLLISION,),
-        spec_fn=get_spec,
-        articulation=EntityArticulationInfoCfg(actuators=T800_MOTORS, soft_joint_pos_limit_factor=0.9),
-    )
+    """T800, see ``entity_cfg``."""
+    return entity_cfg(get_spec, T800_MOTORS, KNEES_BENT)

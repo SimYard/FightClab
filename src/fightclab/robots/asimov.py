@@ -11,11 +11,11 @@ allows more (``RANGES``). Its joints are narrow for this kick: hip flexion 120 d
 """
 
 import mujoco
-from mjlab.asset_zoo.robots.unitree_g1 import g1_constants as g1
-from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
+from mjlab.entity import EntityCfg
 
 from fightclab.robots import ASSETS, painted, unitree
-from fightclab.robots.g1 import STIFF_COLLISION, Motor, unitree_motor
+from fightclab.robots.common import action_scale, entity_cfg
+from fightclab.robots.unitree import Motor, unitree_motor
 
 ASIMOV_XML = ASSETS / "asimov/xmls/asimov_1.xml"
 G1_NAMES = {"pelvis": "pelvis_link", "torso_link": "waist_yaw_link"}  # its other bodies are named like G1's
@@ -61,16 +61,10 @@ ASIMOV_MOTORS = tuple(
         (f".*{joint}_joint",),
         Motor(y1=effort, x1=speed, x2=speed * 1.01, fs=0.0, fd=0.0),  # full torque up to the top speed
         armature=armature,
-        stiffness=armature * g1.NATURAL_FREQ**2,
-        damping=2 * g1.DAMPING_RATIO * armature * g1.NATURAL_FREQ,
     )
     for joint, (effort, speed, armature) in LIMITS.items()
 )
-
-# mjlab's G1 rule: an action of 1 moves the target by a quarter of the peak torque's worth of stiffness.
-ASIMOV_ACTION_SCALE = {
-    name: 0.25 * motor.effort_limit / motor.stiffness for motor in ASIMOV_MOTORS for name in motor.target_names_expr
-}
+ASIMOV_ACTION_SCALE = action_scale(ASIMOV_MOTORS)
 
 KNEES_BENT = EntityCfg.InitialStateCfg(
     pos=(0, 0, 0.61),  # standing straight, the pelvis is at 0.63 m
@@ -87,10 +81,5 @@ KNEES_BENT = EntityCfg.InitialStateCfg(
 
 
 def get_asimov_cfg() -> EntityCfg:
-    """Asimov with all collisions on (self-collisions too), stiff contacts as on our G1."""
-    return EntityCfg(
-        init_state=KNEES_BENT,
-        collisions=(STIFF_COLLISION,),
-        spec_fn=get_spec,
-        articulation=EntityArticulationInfoCfg(actuators=ASIMOV_MOTORS, soft_joint_pos_limit_factor=0.9),
-    )
+    """Asimov, see ``entity_cfg``."""
+    return entity_cfg(get_spec, ASIMOV_MOTORS, KNEES_BENT)

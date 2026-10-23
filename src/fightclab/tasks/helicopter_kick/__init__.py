@@ -12,15 +12,11 @@ from mjlab.tasks.tracking.rl import MotionTrackingOnPolicyRunner
 from fightclab.tasks.helicopter_kick.env_cfg import g1_helicopter_kick_env_cfg
 from fightclab.tasks.helicopter_kick.rl_cfg import g1_helicopter_kick_ppo_runner_cfg
 from fightclab.tasks.helicopter_kick.tracking import (
-    asimov_helicopter_kick_tracking_env_cfg,
+    ROBOT_CFGS,
     g1_helicopter_kick_tracking_env_cfg,
     g1_helicopter_kick_tracking_ppo_runner_cfg,
-    h2_helicopter_kick_tracking_env_cfg,
-    pm01_helicopter_kick_tracking_env_cfg,
+    helicopter_kick_tracking_env_cfg,
     ppo_runner_cfg,
-    r1_helicopter_kick_tracking_env_cfg,
-    t1_helicopter_kick_tracking_env_cfg,
-    t800_helicopter_kick_tracking_env_cfg,
 )
 
 register_mjlab_task(
@@ -38,18 +34,11 @@ register_mjlab_task(
     runner_cls=MotionTrackingOnPolicyRunner,
 )
 
-for robot, env_cfg in (
-    ("r1", r1_helicopter_kick_tracking_env_cfg),
-    ("h2", h2_helicopter_kick_tracking_env_cfg),
-    ("pm01", pm01_helicopter_kick_tracking_env_cfg),
-    ("t800", t800_helicopter_kick_tracking_env_cfg),
-    ("t1", t1_helicopter_kick_tracking_env_cfg),
-    ("asimov", asimov_helicopter_kick_tracking_env_cfg),
-):
+for robot in ROBOT_CFGS:
     register_mjlab_task(
         task_id=f"Fightclab-HelicopterKick-Tracking-{robot.upper()}",
-        env_cfg=env_cfg(),
-        play_env_cfg=env_cfg(play=True),
+        env_cfg=helicopter_kick_tracking_env_cfg(robot),
+        play_env_cfg=helicopter_kick_tracking_env_cfg(robot, play=True),
         rl_cfg=ppo_runner_cfg(robot),
         runner_cls=MotionTrackingOnPolicyRunner,
     )

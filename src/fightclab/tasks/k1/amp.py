@@ -22,6 +22,8 @@ from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.utils.lab_api.math import quat_apply, quat_apply_inverse, quat_from_euler_xyz, quat_mul
 from torch import nn
 
+from fightclab.motion import runs
+
 KEYS = ("LINK_FOOT_L", "LINK_FOOT_R", "LINK_WRIST_END_L", "LINK_WRIST_END_R", "LINK_HEAD_YAW")
 GUARD = 0.43  # m, farthest wrist from the head's base: the coaches' guards are 0.31-0.41, talking 0.46 and up
 # m a wrist may rise above the head's base; the stance's are within 0.02 of it. In 2 of 29 chunks GMR's IK, warm
@@ -172,8 +174,7 @@ def guarded_runs(clip: dict[str, np.ndarray], names: list[str]) -> list[slice]:
     ok &= pos[:, [i("LINK_FOOT_L"), i("LINK_FOOT_R")], 2].max(1) < FOOT_UP  # no kicks
     mean = np.angle(np.exp(1j * yaw[ok]).sum())
     ok &= np.cos(yaw - mean) > 0
-    edges = np.flatnonzero(np.diff(np.r_[0, ok.astype(int), 0]))
-    return [slice(a, b) for a, b in zip(edges[::2], edges[1::2], strict=True) if b - a >= MIN_RUN]
+    return [slice(a, b) for a, b in runs(ok) if b - a >= MIN_RUN]
 
 
 class reset_to_clips:
@@ -228,8 +229,8 @@ if __name__ == "__main__":
     body_names = [m.body(b).name for b in range(1, m.nbody)]
     for path in map(Path, sys.argv[2:]):
         clip = dict(np.load(path))
-        runs = guarded_runs(clip, body_names)
-        for k, run in enumerate(runs):
+        guarded = guarded_runs(clip, body_names)
+        for k, run in enumerate(guarded):
             np.savez(out / f"{path.stem}_{k:02d}.npz", **{n: v if n == "fps" else v[run] for n, v in clip.items()})
-        kept = sum(r.stop - r.start for r in runs)
-        print(f"{path.stem}: kept {kept / 50:.0f} of {len(clip['joint_pos']) / 50:.0f} s in {len(runs)} runs")
+        kept = sum(r.stop - r.start for r in guarded)
+        print(f"{path.stem}: kept {kept / 50:.0f} of {len(clip['joint_pos']) / 50:.0f} s in {len(guarded)} runs")

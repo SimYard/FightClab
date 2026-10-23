@@ -12,10 +12,10 @@ reflected inertia of the Unitree motor nearest in torque (``unitree.nearest``).
 """
 
 import mujoco
-from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
+from mjlab.entity import EntityCfg
 
 from fightclab.robots import ASSETS
-from fightclab.robots.g1 import STIFF_COLLISION
+from fightclab.robots.common import action_scale, entity_cfg
 from fightclab.robots.unitree import nearest
 
 T1_XML = ASSETS / "t1/T1_serial.xml"
@@ -63,11 +63,7 @@ T1_MOTORS = (
     nearest((".*_Ankle_Pitch", ".*_Ankle_Roll", ".*_Shoulder_.*", ".*_Elbow_.*"), 36),  # model 15-20
     nearest(("AAHead_yaw", "Head_pitch"), 7),  # model 7
 )
-
-# mjlab's G1 rule: an action of 1 moves the target by a quarter of the peak torque's worth of stiffness.
-T1_ACTION_SCALE = {
-    name: 0.25 * motor.effort_limit / motor.stiffness for motor in T1_MOTORS for name in motor.target_names_expr
-}
+T1_ACTION_SCALE = action_scale(T1_MOTORS)
 
 KNEES_BENT = EntityCfg.InitialStateCfg(
     pos=(0, 0, 0.68),
@@ -77,10 +73,5 @@ KNEES_BENT = EntityCfg.InitialStateCfg(
 
 
 def get_t1_cfg() -> EntityCfg:
-    """T1 with all collisions on (self-collisions too), stiff contacts as on our G1."""
-    return EntityCfg(
-        init_state=KNEES_BENT,
-        collisions=(STIFF_COLLISION,),
-        spec_fn=get_spec,
-        articulation=EntityArticulationInfoCfg(actuators=T1_MOTORS, soft_joint_pos_limit_factor=0.9),
-    )
+    """T1, see ``entity_cfg``."""
+    return entity_cfg(get_spec, T1_MOTORS, KNEES_BENT)

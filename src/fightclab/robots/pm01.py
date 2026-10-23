@@ -7,10 +7,11 @@ M107-15's (150 N*m) and N7520-14's (71 N*m).
 
 import mujoco
 import numpy as np
-from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
+from mjlab.entity import EntityCfg
 
 from fightclab.robots import ASSETS, engineai
-from fightclab.robots.g1 import STIFF_COLLISION
+from fightclab.robots.common import action_scale, entity_cfg
+from fightclab.robots.unitree import nearest
 
 PM01_XML = ASSETS / "pm01/xml/serial_pm_v2.xml"
 G1_NAMES = engineai.g1_names(torso="LINK_TORSO_YAW", hand="ELBOW_END")
@@ -38,14 +39,10 @@ def get_spec() -> mujoco.MjSpec:
 
 
 PM01_MOTORS = (
-    engineai.motor(("J0[013]_.*", "J0[679]_.*"), 164, 0.045),  # hip pitch and roll, knee
-    engineai.motor(("J0[2458]_.*", "J1[0-9]_.*", "J2[0-3]_.*"), 61, 0.039),  # the rest
+    nearest(("J0[013]_.*", "J0[679]_.*"), 164, 0.045),  # hip pitch and roll, knee
+    nearest(("J0[2458]_.*", "J1[0-9]_.*", "J2[0-3]_.*"), 61, 0.039),  # the rest
 )
-
-# mjlab's G1 rule: an action of 1 moves the target by a quarter of the peak torque's worth of stiffness.
-PM01_ACTION_SCALE = {
-    name: 0.25 * motor.effort_limit / motor.stiffness for motor in PM01_MOTORS for name in motor.target_names_expr
-}
+PM01_ACTION_SCALE = action_scale(PM01_MOTORS)
 
 KNEES_BENT = EntityCfg.InitialStateCfg(
     pos=(0, 0, 0.80),
@@ -55,10 +52,5 @@ KNEES_BENT = EntityCfg.InitialStateCfg(
 
 
 def get_pm01_cfg() -> EntityCfg:
-    """PM01 with all collisions on (self-collisions too), stiff contacts as on our G1."""
-    return EntityCfg(
-        init_state=KNEES_BENT,
-        collisions=(STIFF_COLLISION,),
-        spec_fn=get_spec,
-        articulation=EntityArticulationInfoCfg(actuators=PM01_MOTORS, soft_joint_pos_limit_factor=0.9),
-    )
+    """PM01, see ``entity_cfg``."""
+    return entity_cfg(get_spec, PM01_MOTORS, KNEES_BENT)

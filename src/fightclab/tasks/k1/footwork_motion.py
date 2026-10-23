@@ -5,7 +5,7 @@
 Each chunk (a 60 s piece of a tutorial: CHUNK.npz from ``motion_npz`` next to its grounded CSV, CHUNK.csv) gives its
 guarded runs (``amp.guarded_runs``), merged across gaps under GAP and kept from MIN_SEGMENT on. Every segment is
 turned and moved to start where the last one ended, and a BLEND-long interpolation joins them. Planted feet are
-then held still and the pelvis steadied (``video_motion.lock_feet``): the reconstruction slid the feet, and the
+then held still and the pelvis steadied (``motion.lock_feet``): the reconstruction slid the feet, and the
 coach rocked from side to side. The arms, torso and head hold one guard (GUARD_POSE): the reference is for footwork
 only. Then ``motion_npz t800 OUT.csv <out.npz>`` replays it for the tracking task.
 """
@@ -17,15 +17,8 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.spatial.transform import Rotation, Slerp
 
+from fightclab.motion import ROBOTS, contacts, floating, joint_speed, lock_feet, skating
 from fightclab.robots import t800
-from fightclab.tasks.helicopter_kick.video_motion import (
-    ROBOTS,
-    contacts,
-    floating,
-    joint_speed,
-    lock_feet,
-    skating,
-)  # fmt: skip
 from fightclab.tasks.k1.amp import guarded_runs, in_guard
 
 FPS, NPZ_FPS = 30, 50

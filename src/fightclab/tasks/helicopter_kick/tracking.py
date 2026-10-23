@@ -1,10 +1,11 @@
-"""Helicopter kick by motion tracking: mjlab's BeyondMimic-style G1 tracking on our G1, with adaptive tolerances."""
+"""Helicopter kick by motion tracking: mjlab's BeyondMimic-style G1 tracking on our robots, with adaptive tolerances."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import torch
 from mjlab.envs.mdp.actions import JointPositionActionCfg
@@ -16,36 +17,32 @@ from mjlab.tasks.tracking.config.g1.env_cfgs import unitree_g1_flat_tracking_env
 from mjlab.tasks.tracking.config.g1.rl_cfg import unitree_g1_tracking_ppo_runner_cfg
 from mjlab.tasks.tracking.mdp import MotionCommand, MotionCommandCfg, bad_motion_body_pos_z_only
 
-from fightclab.robots.asimov import ASIMOV_ACTION_SCALE, get_asimov_cfg
-from fightclab.robots.asimov import G1_NAMES as ASIMOV_NAMES
+from fightclab.robots import asimov, h2, pm01, r1, t1, t800
 from fightclab.robots.g1 import get_g1_cfg
-from fightclab.robots.h2 import H2_ACTION_SCALE, get_h2_cfg
-from fightclab.robots.pm01 import G1_NAMES as PM01_NAMES
-from fightclab.robots.pm01 import PM01_ACTION_SCALE, get_pm01_cfg
-from fightclab.robots.r1 import R1_ACTION_SCALE, get_r1_cfg
-from fightclab.robots.t1 import G1_NAMES as T1_NAMES
-from fightclab.robots.t1 import T1_ACTION_SCALE, get_t1_cfg
-from fightclab.robots.t800 import G1_NAMES as T800_NAMES
-from fightclab.robots.t800 import T800_ACTION_SCALE, get_t800_cfg
 from fightclab.sim import Rk4MujocoCfg
 from fightclab.tasks.helicopter_kick import mdp as kick_mdp
 from fightclab.tasks.helicopter_kick.env_cfg import FEET, feet_ground_contact
-from fightclab.tasks.helicopter_kick.video_motion import ROBOTS, phases
+from fightclab.tasks.helicopter_kick.video_motion import phases
+from fightclab.tracking import AdaptiveExp, bad_anchor_heading, feet_height
 
 if TYPE_CHECKING:
     from mjlab.entity import EntityCfg
     from mjlab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg
-    from mjlab.managers.scene_entity_config import SceneEntityCfg
 
-# The kick from a Ginger Ninja tutorial clip, made by video_motion.py and motion_npz.py (see their docstrings).
-# The keyframe version from reference.py is helicopter_kick.npz; it looks stiffer than the person.
-MOTION = Path(__file__).with_name("helicopter_kick_video.npz")
-MOTION_R1 = Path(__file__).with_name("helicopter_kick_video_r1.npz")
-MOTION_H2 = Path(__file__).with_name("helicopter_kick_video_h2.npz")
-MOTION_PM01 = Path(__file__).with_name("helicopter_kick_video_pm01.npz")
-MOTION_T800 = Path(__file__).with_name("helicopter_kick_video_t800.npz")
-MOTION_T1 = Path(__file__).with_name("helicopter_kick_video_t1.npz")
-MOTION_ASIMOV = Path(__file__).with_name("helicopter_kick_video_asimov.npz")
+# Our other robots, for G1's task: the entity, its action scales, and its names for the G1 bodies mjlab's task uses.
+ROBOT_CFGS: dict[str, tuple[Callable[[], EntityCfg], dict[str, float], dict[str, str]]] = {
+    # R1's bodies are named like G1's, but its hands end at the wrist roll link.
+    "r1": (
+        r1.get_r1_cfg,
+        r1.R1_ACTION_SCALE,
+        {f"{s}_wrist_yaw_link": f"{s}_wrist_roll_link" for s in ("left", "right")},
+    ),
+    "h2": (h2.get_h2_cfg, h2.H2_ACTION_SCALE, {}),
+    "pm01": (pm01.get_pm01_cfg, pm01.PM01_ACTION_SCALE, pm01.G1_NAMES),
+    "t800": (t800.get_t800_cfg, t800.T800_ACTION_SCALE, t800.G1_NAMES),
+    "t1": (t1.get_t1_cfg, t1.T1_ACTION_SCALE, t1.G1_NAMES),
+    "asimov": (asimov.get_asimov_cfg, asimov.ASIMOV_ACTION_SCALE, asimov.G1_NAMES),
+}
 
 # mjlab's tracking rewards, all exp(-error / std**2), that get adaptive tolerances.
 TRACKING_REWARDS = (
@@ -58,33 +55,9 @@ TRACKING_REWARDS = (
 )
 
 
-class AdaptiveExp:
-    """KungfuBot's adaptive tracking factor (PBHC, arXiv 2506.12851) around an mjlab tracking reward.
-
-    The tolerance sigma takes the place of std**2. It starts ``loose`` times wider than mjlab's std and only
-    shrinks, to the moving average of the error: sigma <- min(sigma, EMA(error)). With mjlab's fixed std the
-    takeoff and flight errors were so large that their reward was almost zero and the policy never got
-    past takeoff; a wide tolerance first rewards rough tracking there, and tightens as the policy improves.
-    """
-
-    def __init__(self, cfg: RewardTermCfg, env: ManagerBasedRlEnv) -> None:
-        """Start sigma ``loose`` times wider than mjlab's std."""
-        self.sigma = torch.tensor((cfg.params["std"] * cfg.params["loose"]) ** 2, device=env.device)
-        # The EMA starts at sigma, not at the first error: right after a reset the robot sits exactly on the
-        # reference, the error is ~0, and sigma, which never grows back, would collapse on the first step.
-        self.ema = self.sigma.clone()
-        self.log_key = f"Metrics/adaptive_sigma/{cfg.params['func'].__name__}"
-
-    def __call__(
-        self, env: ManagerBasedRlEnv, func: Any, std: float, loose: float, alpha: float, **kwargs: Any
-    ) -> torch.Tensor:
-        """Reward with the current sigma; the EMA moves by ``alpha`` per env step."""
-        del std, loose
-        error = -torch.log(func(env, std=1.0, **kwargs).clamp(min=1e-30))  # mjlab's error, recovered
-        self.ema = (1 - alpha) * self.ema + alpha * error.mean()
-        self.sigma = torch.minimum(self.sigma, self.ema).clamp(min=1e-6)
-        env.extras["log"][self.log_key] = self.sigma
-        return torch.exp(-error / self.sigma)
+def motion_file(robot: str) -> Path:
+    """The kick from a Ginger Ninja tutorial clip on ``robot``, made by video_motion.py and motion_npz.py."""
+    return Path(__file__).with_name(f"helicopter_kick_video_{robot}.npz")
 
 
 def flight(
@@ -100,48 +73,7 @@ def flight(
     assert isinstance(motion, MotionCommand)
     t = motion.time_steps * env.step_dt
     takeoff, landing = window or phases()  # the robot's reference flight, G1's by default
-    return ((t > takeoff) & (t < landing) & kick_mdp._airborne(env, sensor_name)).float()
-
-
-def feet_height(env: ManagerBasedRlEnv, command_name: str, body_names: tuple[str, ...], std: float) -> torch.Tensor:
-    """exp(-(reference height - foot height)^2 / std^2), averaged over the feet.
-
-    mjlab's body tracking averages its error over 14 bodies, so a kicking foot 10-15 cm short of the reference costs
-    almost nothing: policies that landed every kick kicked 8-31 cm low, and more training lowered R1's kick further.
-    """
-    motion = env.command_manager.get_term(command_name)
-    assert isinstance(motion, MotionCommand)
-    feet = [motion.cfg.body_names.index(name) for name in body_names]
-    error = motion.body_pos_relative_w[:, feet, 2] - motion.robot_body_pos_w[:, feet, 2]
-    return torch.exp(-(error**2) / std**2).mean(dim=-1)
-
-
-def feet_contact_slip(env: ManagerBasedRlEnv, sensor_name: str, asset_cfg: SceneEntityCfg) -> torch.Tensor:
-    """Squared floor speed of the feet touching the floor, summed.
-
-    Tracking pays for where a foot is, not how it got there: T800's footwork slid its following foot up to 9 cm per
-    step along the floor before lifting it (the reference: 0.2 cm). A heel rising on the ball barely moves the foot.
-    """
-    feet = env.scene[asset_cfg.name].data.body_link_lin_vel_w[:, asset_cfg.body_ids, :2]
-    touching = env.scene[sensor_name].data.found > 0
-    return (feet.square().sum(dim=-1) * touching).sum(dim=-1)
-
-
-def bad_anchor_heading(env: ManagerBasedRlEnv, command_name: str, threshold: float) -> torch.Tensor:
-    """True when the anchor body faces more than ``threshold`` radians off the reference's heading.
-
-    mjlab's anchor terminations check its height and tilt, not where it faces: Asimov landed every kick by turning
-    70 degrees and back instead of 360.
-    """
-    motion = env.command_manager.get_term(command_name)
-    assert isinstance(motion, MotionCommand)
-
-    def heading(q: torch.Tensor) -> torch.Tensor:  # of the body's x axis, projected on the floor; q is (w, x, y, z)
-        w, x, y, z = q.unbind(-1)
-        return torch.atan2(2 * (x * y + w * z), 1 - 2 * (y * y + z * z))
-
-    error = heading(motion.anchor_quat_w) - heading(motion.robot_anchor_quat_w)
-    return torch.atan2(torch.sin(error), torch.cos(error)).abs() > threshold
+    return ((t > takeoff) & (t < landing) & kick_mdp.in_air(env, sensor_name)).float()
 
 
 def g1_helicopter_kick_tracking_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
@@ -154,7 +86,7 @@ def g1_helicopter_kick_tracking_env_cfg(play: bool = False) -> ManagerBasedRlEnv
     cfg.sim.mujoco = Rk4MujocoCfg(**vars(cfg.sim.mujoco))
     motion = cfg.commands["motion"]
     assert isinstance(motion, MotionCommandCfg)
-    motion.motion_file = str(MOTION)
+    motion.motion_file = str(motion_file("g1"))
     if not play:
         # mjlab's adaptive sampling has one bin per second (three here) and weighs them by failures. Once only
         # the takeoff failed, ~98% of starts went to 0.83-1.67 s, the run-up into the crouch went unpractised,
@@ -190,26 +122,24 @@ def g1_helicopter_kick_tracking_env_cfg(play: bool = False) -> ManagerBasedRlEnv
     return cfg
 
 
-def _on_robot(
-    play: bool, entity: EntityCfg, scale: dict[str, float], motion_file: Path, names: dict[str, str] | None = None
-) -> ManagerBasedRlEnvCfg:
-    """G1's task on another robot: its entity, action scales and motion, and its ``names`` for G1's bodies.
+def helicopter_kick_tracking_env_cfg(robot: str, play: bool = False) -> ManagerBasedRlEnvCfg:
+    """G1's task on another of our robots (``ROBOT_CFGS``), on its own motion and flight (``video_motion.JUMPS``).
 
     Foot geoms must be named like G1's (``left_foot1_collision``, ...); our robot modules do that.
     """
-    names = names or {}
+    entity, scale, names = ROBOT_CFGS[robot]
 
     def rename(body: str) -> str:
         return names.get(body, body)
 
     cfg = g1_helicopter_kick_tracking_env_cfg(play=play)
-    cfg.scene.entities = {"robot": entity}
+    cfg.scene.entities = {"robot": entity()}
     action = cfg.actions["joint_pos"]
     assert isinstance(action, JointPositionActionCfg)
     action.scale = scale
     motion = cfg.commands["motion"]
     assert isinstance(motion, MotionCommandCfg)
-    motion.motion_file = str(motion_file)
+    motion.motion_file = str(motion_file(robot))
     motion.anchor_body_name = rename(motion.anchor_body_name)
     motion.body_names = tuple(map(rename, motion.body_names))
     for limb in ("ee_body_pos", "feet_pos"):
@@ -225,41 +155,7 @@ def _on_robot(
         *(replace(s, primary=whole, secondary=whole) for s in cfg.scene.sensors if s.name == "self_collision"),
         feet_ground_contact(rename("left_ankle_roll_link"), rename("right_ankle_roll_link")),
     )
-    return cfg
-
-
-def r1_helicopter_kick_tracking_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-    """The same task on R1. Its bodies are named like G1's, but its hands end at the wrist roll link."""
-    hands = {f"{side}_wrist_yaw_link": f"{side}_wrist_roll_link" for side in ("left", "right")}
-    return _on_robot(play, get_r1_cfg(), R1_ACTION_SCALE, MOTION_R1, hands)
-
-
-def h2_helicopter_kick_tracking_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-    """The same task on H2, whose bodies are named like G1's."""
-    return _on_robot(play, get_h2_cfg(), H2_ACTION_SCALE, MOTION_H2)
-
-
-def pm01_helicopter_kick_tracking_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-    """The same task on EngineAI's PM01."""
-    return _on_robot(play, get_pm01_cfg(), PM01_ACTION_SCALE, MOTION_PM01, PM01_NAMES)
-
-
-def t800_helicopter_kick_tracking_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-    """The same task on EngineAI's T800."""
-    return _on_robot(play, get_t800_cfg(), T800_ACTION_SCALE, MOTION_T800, T800_NAMES)
-
-
-def t1_helicopter_kick_tracking_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-    """The same task on Booster's T1, whose reference flies shorter than G1's (see video_motion.ROBOTS)."""
-    cfg = _on_robot(play, get_t1_cfg(), T1_ACTION_SCALE, MOTION_T1, T1_NAMES)
-    cfg.rewards["flight"].params["window"] = phases(ROBOTS["t1"])
-    return cfg
-
-
-def asimov_helicopter_kick_tracking_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-    """The same task on Asimov v1, whose reference flies shorter than G1's (see video_motion.ROBOTS)."""
-    cfg = _on_robot(play, get_asimov_cfg(), ASIMOV_ACTION_SCALE, MOTION_ASIMOV, ASIMOV_NAMES)
-    cfg.rewards["flight"].params["window"] = phases(ROBOTS["asimov"])
+    cfg.rewards["flight"].params["window"] = phases(robot)
     return cfg
 
 
