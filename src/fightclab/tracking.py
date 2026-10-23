@@ -31,13 +31,25 @@ class AdaptiveExp:
         self.log_key = f"Metrics/adaptive_sigma/{cfg.params['func'].__name__}"
 
     def __call__(
-        self, env: ManagerBasedRlEnv, func: Any, std: float, loose: float, alpha: float, **kwargs: Any
+        self,
+        env: ManagerBasedRlEnv,
+        *,
+        func: Any,
+        std: float,
+        loose: float,
+        alpha: float,
+        floor: float = 0.0,
+        **kwargs: Any,
     ) -> torch.Tensor:
-        """Reward with the current sigma; the EMA moves by ``alpha`` per env step."""
+        """Reward with the current sigma; the EMA moves by ``alpha`` per env step, sigma stays above ``floor``**2.
+
+        A floor matters when a rare motion rides on a common one: T800's footwork tightened the torso's sigma to
+        1.6 deg, and jabs turning it 8 deg short earned nothing, so nothing was learned about them.
+        """
         del std, loose
         error = -torch.log(func(env, std=1.0, **kwargs).clamp(min=1e-30))  # mjlab's error, recovered
         self.ema = (1 - alpha) * self.ema + alpha * error.mean()
-        self.sigma = torch.minimum(self.sigma, self.ema).clamp(min=1e-6)
+        self.sigma = torch.minimum(self.sigma, self.ema).clamp(min=max(floor**2, 1e-6))
         env.extras["log"][self.log_key] = self.sigma
         return torch.exp(-error / self.sigma)
 
@@ -53,6 +65,42 @@ def feet_height(env: ManagerBasedRlEnv, command_name: str, body_names: tuple[str
     feet = [motion.cfg.body_names.index(name) for name in body_names]
     error = motion.body_pos_relative_w[:, feet, 2] - motion.robot_body_pos_w[:, feet, 2]
     return torch.exp(-(error**2) / std**2).mean(dim=-1)
+
+
+def bodies_pos(env: ManagerBasedRlEnv, command_name: str, body_names: tuple[str, ...], std: float) -> torch.Tensor:
+    """exp(-mean squared distance of ``body_names`` from the reference / std**2), in the reference's frame.
+
+    For the same reason as ``feet_height``: a T800 jab whose fist stayed 13 cm short, the forearm up by the head,
+    cost almost nothing in mjlab's body tracking averaged over 14 bodies.
+    """
+    motion = env.command_manager.get_term(command_name)
+    assert isinstance(motion, MotionCommand)
+    bodies = [motion.cfg.body_names.index(name) for name in body_names]
+    error = motion.body_pos_relative_w[:, bodies] - motion.robot_body_pos_w[:, bodies]
+    return torch.exp(-error.square().sum(dim=-1).mean(dim=-1) / std**2)
+
+
+def body_ang_vel_error_xy(env: ManagerBasedRlEnv, command_name: str, body_names: tuple[str, ...]) -> torch.Tensor:
+    """Squared roll and pitch rate of ``body_names`` off the reference's, summed.
+
+    Rocking measured against a still reference also taxed the lean a jab is meant to make.
+    """
+    motion = env.command_manager.get_term(command_name)
+    assert isinstance(motion, MotionCommand)
+    bodies = [motion.cfg.body_names.index(name) for name in body_names]
+    error = motion.robot_body_ang_vel_w[:, bodies, :2] - motion.body_ang_vel_w[:, bodies, :2]
+    return error.square().sum(dim=(-1, -2))
+
+
+def joint_vel_error_l2(env: ManagerBasedRlEnv, command_name: str, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+    """Squared joint speed off the reference's, summed over ``asset_cfg``'s joints.
+
+    Penalizing the speed itself kept T800's guard still through footwork, but fights a jab the reference throws.
+    """
+    motion = env.command_manager.get_term(command_name)
+    assert isinstance(motion, MotionCommand)
+    joints = asset_cfg.joint_ids
+    return (motion.robot_joint_vel[:, joints] - motion.joint_vel[:, joints]).square().sum(dim=-1)
 
 
 def feet_contact_slip(env: ManagerBasedRlEnv, sensor_name: str, asset_cfg: SceneEntityCfg) -> torch.Tensor:
