@@ -148,13 +148,14 @@ def body_ramp(
     onset, peak = int(np.argmax(extension > 0.05)) + late, int(np.argmax(extension)) + late  # noqa: PLR2004
     top += peak
     frames = np.arange(len(extension))
-    up = np.clip((frames - (onset - lead)) / (top - onset + lead), 0.0, 1.0)
-    down = np.clip((frames - top - hold) / back, 0.0, 1.0)
-
-    def jerk(s: NDArray[np.float64]) -> NDArray[np.float64]:
-        return 10 * s**3 - 15 * s**4 + 6 * s**5
-
+    up, down = (frames - (onset - lead)) / (top - onset + lead), (frames - top - hold) / back
     return np.where(frames <= top, jerk(up), 1.0 - jerk(down))
+
+
+def jerk(s: NDArray[np.float64]) -> NDArray[np.float64]:
+    """Minimum jerk from 0 to 1 as ``s`` goes from 0 to 1, flat outside."""
+    s = np.clip(s, 0.0, 1.0)
+    return 10 * s**3 - 15 * s**4 + 6 * s**5
 
 
 class Arm(NamedTuple):

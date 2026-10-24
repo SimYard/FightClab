@@ -18,7 +18,7 @@ from numpy.typing import NDArray
 
 from fightclab.motion import set_pose
 from fightclab.tasks.k1.footwork import OPPONENT_YAW
-from fightclab.tasks.k1.strikes import REAR_ARM, aim, arm_chain
+from fightclab.tasks.k1.strikes import REAR_ARM, aim, arm_chain, jerk
 
 HEAD = "LINK_HEAD_YAW"
 # m, the right wrist end's origin at the catch (its glove sphere 0.190 m forward, 0.021 m right, 0.051 m up): within
@@ -38,12 +38,7 @@ IN_LAG = 0.25  # of the way out before the glove starts in
 FRAMES = OUT + HOLD + BACK
 
 
-def _jerk(s: float) -> float:
-    s = min(max(s, 0.0), 1.0)
-    return 10 * s**3 - 15 * s**4 + 6 * s**5
-
-
-def _progress(i: int) -> tuple[float, float]:
+def _progress(i: int) -> NDArray[np.float64]:
     """How far toward the intercept the glove is in frame ``i``: forward and up, and in."""
     if i <= OUT:
         u = i / OUT
@@ -51,7 +46,7 @@ def _progress(i: int) -> tuple[float, float]:
         u = 1.0
     else:
         u = 1.0 - (i - OUT - HOLD) / BACK  # the way out, reversed: in comes back first
-    return _jerk(u), _jerk((u - IN_LAG) / (1 - IN_LAG))
+    return jerk(np.array((u, (u - IN_LAG) / (1 - IN_LAG))))
 
 
 def catch(m: mujoco.MjModel, d: mujoco.MjData, adr: NDArray[np.int_], rows: NDArray[np.float64]) -> None:
