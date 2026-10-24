@@ -1,7 +1,7 @@
 """The rear-hand catch of a head jab, for the footwork generator (``steps.py``), to the K-1 coach's measures.
 
 The rear glove (the end of the right forearm: the robot has no hands) goes from the guard to an intercept point on
-the incoming fist's line, 0.17 m in front of the head and just right of the lead glove, holds there past the jab's
+the incoming fist's line, 0.20 m in front of the head and just right of the lead glove, holds there past the jab's
 full reach and comes back the same way. It goes forward first and in after (the sideways part starts IN_LAG of the
 way out): moving straight there, the glove cut 1-1.5 cm into the head. Nothing else moves: the stance, pelvis,
 torso, head and the lead glove, which covers the other half of the face, stay as in the guard.
@@ -21,16 +21,17 @@ from fightclab.tasks.k1.footwork import OPPONENT_YAW
 from fightclab.tasks.k1.strikes import REAR_ARM, aim, arm_chain, jerk
 
 HEAD = "LINK_HEAD_YAW"
-# m, the right wrist end's origin at the catch (its glove sphere 0.190 m forward, 0.021 m right, 0.051 m up): within
-# 2.4 cm of the fist's line for head jabs aimed 1.56-1.64 m high, which the defender can't tell apart in time. Set for
-# a chin-high jab, a jab to the face's centre met its top edge at 27 deg and slid into the forehead (the coach). Left
-# of this the shoulder's roll is at its limit (0.384 rad) and the lead glove, 8 mm away, covers the rest.
+# m, the right wrist end's origin at the coach's catch (its glove sphere 0.190 m forward, 0.021 m right, 0.051 m up):
+# within 2.4 cm of the fist's line for head jabs aimed 1.56-1.64 m high, which the defender can't tell apart in time.
+# Set for a chin-high jab, a jab to the face's centre met its top edge at 27 deg and slid into the forehead (the
+# coach). Left of this the shoulder's roll is at its limit (0.384 rad) and the lead glove, 8 mm away, covers the rest.
 INTERCEPT = np.array((0.201, -0.056, 0.000))
 # The shoulder's roll stays this far from its limit: a target at the stop leaves the tracker no room and sends a hit on
-# the glove into the stop (the coach). The glove then holds 0.5 cm off INTERCEPT, and the gloves still overlap seen
-# from the front.
+# the glove into the stop (the coach). The wrist end then holds 0.5 cm off INTERCEPT (the glove sphere 0.191 m forward,
+# 0.016 m right, 0.046 m up), and the gloves still overlap seen from the front.
 ROLL_MARGIN = np.radians(5.0)
-# The arm at the catch (the IK at INTERCEPT, the roll ROLL_MARGIN short): the forearm 56 deg up, 2.1 cm from the head.
+# The arm at the catch (the IK at INTERCEPT, the roll ROLL_MARGIN short): the forearm (elbow pitch to wrist end) 52 deg
+# up, its collision geoms 2.8 cm from the head's.
 CATCH_POSE = dict(zip(REAR_ARM, (-1.424, 0.297, 0.659, -1.521, -0.209), strict=True))
 PRIOR_WEIGHT = 0.3  # how hard the IK holds each joint near the path between the guard and CATCH_POSE
 OUT, HOLD, BACK = 4, 5, 6  # frames at 30 fps: out in 0.133 s, in place 0.05 s before contact to 0.1 s after, back 0.2 s

@@ -101,9 +101,9 @@ def t800_k1_footwork_tracking_env_cfg(play: bool = False) -> ManagerBasedRlEnvCf
         weight=3.0,
         params={"command_name": "motion", "body_names": ("LINK_WRIST_END_L", "LINK_WRIST_END_R"), "std": 0.05},
     )
-    # The catch's rear arm from afar: 10 cm off, the fists' width paid 1% and pulled nothing, and the trained glove
-    # stayed out by the cheek with the elbow wide. The elbow too, or a flat forearm with the elbow up and out would earn
-    # it (the K-1 coach). As much as the fists.
+    # The catch's rear arm from afar: 10 cm off with the lead fist on target, the fists' term paid 13%, and the trained
+    # glove stayed out by the cheek with the elbow wide. The elbow too, or a flat forearm with the elbow up and out
+    # would earn it (the K-1 coach). As much as the fists.
     cfg.rewards["rear_arm"] = RewardTermCfg(
         func=bodies_pos,
         weight=3.0,

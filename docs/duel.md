@@ -100,8 +100,8 @@ still to come.
 **The catch** (`k1/catch.py`, mkc1-mkc2): the rear glove (the end of the right forearm) goes forward, then in, to an
 intercept 0.20 m in front of the head and 0.056 m right of its centre, holds there 0.17 s and comes back the same way;
 nothing else moves. The training motion mixes catches in, as many as head jabs. With only the fists' 5 cm wide term
-(mkc1, 1200 iterations) the glove stayed 9-10 cm off, out by the cheek with the elbow 7 cm wide: 10 cm off, that
-width pays 1%. Two changes got it there (mkc2, 1500 iterations): the reference arm keeps the shoulder's roll 5 deg off
+(mkc1, 1200 iterations) the glove stayed 9-10 cm off, out by the cheek with the elbow 7 cm wide: 10 cm off with the
+lead fist on target, that term pays 13%. Two changes got it there (mkc2, 1500 iterations): the reference arm keeps the shoulder's roll 5 deg off
 its stop (the coach: a target at the stop leaves the tracker no room and sends a hit on the glove into the stop), and
 a 15 cm wide term on the rear glove and elbow (with the glove alone, a flat forearm with the elbow up and out would
 earn it). The coach's checks, in the opponent frame at the head:
