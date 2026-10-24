@@ -8,7 +8,8 @@ Each move command moves the stance in step-drags: the foot nearer the direction 
 the rear foot going back or right) steps STEP_LENGTH with its sole lifted STEP_LIFT, then the other foot follows as
 far. The pelvis follows the feet's midpoint at the stance's height and lean; arms, torso and head hold the guard; the
 legs are solved by inverse kinematics. Strike commands (``strikes.STRIKES``: jab, jab_body, step_jab) throw a jab
-from that guard, see ``strike``. Rows are at 30 fps (root pos, quat xyzw, joints) with OUT.labels.txt naming
+from that guard, see ``strike``; ``catch`` brings the rear glove in front of the face (``catch.py``). Rows are at
+30 fps (root pos, quat xyzw, joints) with OUT.labels.txt naming
 each row's command; ``motion_npz t800 OUT.csv OUT.npz`` makes it a motion for the tracking task.
 
 The video reference brought the coach's demo habits along: 46 cm lunges, a rocking pelvis, dragged and hanging feet,
@@ -28,6 +29,7 @@ from scipy.signal import savgol_filter
 from scipy.spatial.transform import Rotation
 
 from fightclab.motion import ROBOTS, leg_chains, lowest, model, reach, set_pose, soles
+from fightclab.tasks.k1 import catch
 from fightclab.tasks.k1.footwork import OPPONENT_YAW, STANCE
 from fightclab.tasks.k1.footwork_motion import FPS, GUARD_POSE
 from fightclab.tasks.k1.strikes import (
@@ -78,6 +80,7 @@ PELVIS_DROP = 0.04
 TRAIN_STRIKES = ("step_jab", "jab", "jab_body")
 # Unit moves in the opponent's frame (forward, left) and which foot steps first (0 left/lead, 1 right/rear).
 COMMANDS = {"forward": ((1, 0), 0), "back": ((-1, 0), 1), "left": ((0, 1), 0), "right": ((0, -1), 1), "stop": None}
+CATCH = "catch"  # the rear-hand catch of a head jab (``catch.py``)
 
 
 class Aim(NamedTuple):
@@ -157,6 +160,10 @@ def plan(
     extension = profile()[0]
     peak, n = int(np.argmax(extension)), round(STEP_SWING * FPS)
     for name, seconds, *rest in commands:
+        if name == CATCH:  # the feet hold; the rear glove catches (``catch.py``)
+            strikes.append((len(pos), name, None))
+            hold(max(seconds, catch.FRAMES / FPS), name)
+            continue
         if name in STRIKES:  # the feet hold, or the lead foot steps in to land with the fist and the rear follows
             aim = rest[0] if rest else None
             strikes.append((len(pos), name, aim))
@@ -208,6 +215,8 @@ def build(commands: list[Command], st: Stance = CLIP_STANCE) -> tuple[NDArray[np
     toward = np.array((np.cos(OPPONENT_YAW), np.sin(OPPONENT_YAW)))
     rear = np.zeros(len(rows))  # how far into the strike the rear foot is, 0 to 1
     for start, name, point in strikes:
+        if name not in STRIKES:  # a catch moves nothing but the rear arm
+            continue
         target = aimed(name, point)
         late = STEP_LATE if STRIKES[name][1] else 0
         ramp = body_ramp(extension, target.lead, target.back, late=late)
@@ -257,7 +266,10 @@ def build(commands: list[Command], st: Stance = CLIP_STANCE) -> tuple[NDArray[np
     for name, angle in GUARD_POSE.items():
         rows[:, 7 + ROBOT.joints.index(name)] = angle
     for start, name, point in strikes:
-        strike(m, d, adr, rows[start : start + len(extension)], aimed(name, point))
+        if name in STRIKES:
+            strike(m, d, adr, rows[start : start + len(extension)], aimed(name, point))
+        else:
+            catch.catch(m, d, adr, rows[start:])
     return rows, labels
 
 
