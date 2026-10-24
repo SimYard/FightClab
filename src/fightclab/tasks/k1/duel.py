@@ -7,9 +7,12 @@ and its motion command keeps the learner's frame. Its observations carry no nois
 
 import copy
 import inspect
+import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, fields, replace
 from functools import partial
+from pathlib import Path
 
 import mujoco
 import torch
@@ -19,7 +22,9 @@ from mjlab.managers.action_manager import ActionTerm, ActionTermCfg
 from mjlab.managers.observation_manager import ObservationGroupCfg
 from mjlab.sensor import ContactMatch, ContactSensorCfg
 from mjlab.tasks.tracking.mdp import MotionCommand, MotionCommandCfg
+from mjlab.utils.spec_config import CollisionCfg
 
+from fightclab.robots.common import STIFF_COLLISION
 from fightclab.tasks.k1 import makiwara
 
 ENTITY = "opponent"  # also its action term's and observation group's name
@@ -28,6 +33,18 @@ HEAD_HITS = "opponent_fist_on_head"
 # m between the robots until the first reset puts the opponent on its motion: one inside the other, their 76 contacts
 # overflowed the solver's buffers.
 APART = 2.0
+# What the robots touch each other with: capsules and boxes fitted to the upper body's visual meshes
+# (``tools/fit_primitives_t800.py`` writes them; derived data, not in git). The vendor's collision primitives are much
+# smaller (the head an 18 cm ball for a 21 x 16 x 22 cm helmet, a forearm a 7 x 7 x 16 cm brick for 14 x 10 x 26 cm)
+# and frictionless (condim 1): a fist slid up a glove into the forehead. The trackers learned the floor and their own
+# bodies on those primitives, so those stay for that.
+SHELLS = Path.home() / "fw_clips" / "t800_primitives.json"
+STRIKERS = re.compile("ELBOW_YAW")  # the forearms, the fist's end included (the robot has no hands)
+SHELL_FRICTION = 0.5  # no data for plastic shells; as the floor's rubber, to calibrate
+SHELL_GROUP = 3  # not drawn
+# contype bits of each robot's strikers and targets. A striker meets the other robot's strikers and targets, a
+# target only its strikers: no head on head, no robot on itself or the floor (those are the vendor's primitives).
+STRIKE, TARGET = {"robot": 2, ENTITY: 8}, {"robot": 4, ENTITY: 16}
 
 
 class FollowerMotionCommand(MotionCommand):
@@ -146,11 +163,14 @@ def opponent_observations(actor: ObservationGroupCfg) -> ObservationGroupCfg:
 
 
 def fist_on_head(substeps: int) -> ContactSensorCfg:
-    """The opponent's lead fist's net force on the learner's head, per physics substep of a policy step."""
+    """The opponent's net force on the learner's head, per physics substep of a policy step.
+
+    Its whole body, not its fist's ball: with no hands, the jab lands with the forearm's end as well.
+    """
     return ContactSensorCfg(
         name=HEAD_HITS,
-        primary=ContactMatch(mode="body", pattern="LINK_HEAD_YAW", entity="robot"),
-        secondary=ContactMatch(mode="body", pattern=makiwara.FIST, entity=ENTITY),
+        primary=ContactMatch(mode="body", pattern="LINK_HEAD_.*", entity="robot"),
+        secondary=ContactMatch(mode="subtree", pattern="LINK_BASE", entity=ENTITY),
         fields=("found", "force"),
         reduce="netforce",
         history_length=substeps,
@@ -159,8 +179,8 @@ def fist_on_head(substeps: int) -> ContactSensorCfg:
 
 def head_hits(env: ManagerBasedRlEnv) -> torch.Tensor:
     """The impulse of the opponent's fist into the head this step, in makiwara hits (``makiwara.IMPULSE_SCALE``)."""
-    force = env.scene[HEAD_HITS].data.force_history[:, 0]  # (envs, substeps, 3)
-    return torch.linalg.norm(force, dim=-1).sum(dim=-1) * makiwara.PHYSICS_DT / makiwara.IMPULSE_SCALE
+    force = env.scene[HEAD_HITS].data.force_history  # (envs, head bodies, substeps, 3)
+    return torch.linalg.norm(force, dim=-1).sum(dim=(1, 2)) * makiwara.PHYSICS_DT / makiwara.IMPULSE_SCALE
 
 
 def _apart(spec_fn: Callable[[], mujoco.MjSpec]) -> mujoco.MjSpec:
@@ -168,6 +188,44 @@ def _apart(spec_fn: Callable[[], mujoco.MjSpec]) -> mujoco.MjSpec:
     spec = spec_fn()
     spec.worldbody.first_body().pos[0] += APART
     return spec
+
+
+def _shells(spec_fn: Callable[[], mujoco.MjSpec]) -> mujoco.MjSpec:
+    """The robot's spec with SHELLS' primitives as ``<body>_<k>_striker`` or ``_target`` collision geoms."""
+    spec = spec_fn()
+    for body, prims in json.loads(SHELLS.read_text()).items():  # missing: FileNotFoundError
+        role = "striker" if STRIKERS.search(body) else "target"
+        for k, p in enumerate(prims):
+            name = f"{body}_{k}_{role}"
+            if p["type"] == "capsule":
+                kind = mujoco.mjtGeom.mjGEOM_CAPSULE
+                spec.body(body).add_geom(name=name, type=kind, fromto=p["fromto"], size=[p["radius"], 0, 0])
+            else:
+                kind = mujoco.mjtGeom.mjGEOM_BOX
+                spec.body(body).add_geom(name=name, type=kind, pos=p["pos"], quat=p["quat"], size=p["size"])
+            spec.geom(name).group = SHELL_GROUP
+    return spec
+
+
+def shell_collisions(own: str, other: str) -> tuple[CollisionCfg, CollisionCfg]:
+    """``own``'s strikers and targets touching ``other``'s (STRIKE, TARGET), with friction, as stiff as the rest."""
+    common = {"condim": 3, "priority": 0, "friction": (SHELL_FRICTION,), "solref": STIFF_COLLISION.solref}
+    return (
+        CollisionCfg(
+            geom_names_expr=(".*_striker",),
+            contype=STRIKE[own],
+            conaffinity=STRIKE[other] | TARGET[other],
+            disable_other_geoms=False,
+            **common,
+        ),
+        CollisionCfg(
+            geom_names_expr=(".*_target",),
+            contype=TARGET[own],
+            conaffinity=STRIKE[other],
+            disable_other_geoms=False,
+            **common,
+        ),
+    )
 
 
 def add_opponent(cfg: ManagerBasedRlEnvCfg, motion: str, policy: str) -> None:
@@ -178,7 +236,10 @@ def add_opponent(cfg: ManagerBasedRlEnvCfg, motion: str, policy: str) -> None:
     """
     robot = cfg.scene.entities["robot"]
     opponent = cfg.scene.entities[ENTITY] = copy.deepcopy(robot)
-    opponent.spec_fn = partial(_apart, robot.spec_fn)
+    opponent.spec_fn = partial(_shells, partial(_apart, robot.spec_fn))
+    robot.spec_fn = partial(_shells, robot.spec_fn)
+    robot.collisions = (*robot.collisions, *shell_collisions("robot", ENTITY))
+    opponent.collisions = (*opponent.collisions, *shell_collisions(ENTITY, "robot"))
     x, y, z = opponent.init_state.pos
     opponent.init_state.pos = (x + APART, y, z)
     leader = cfg.commands["motion"]
