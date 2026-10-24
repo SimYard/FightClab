@@ -45,7 +45,7 @@ TWIST_WEIGHT, ROLL_WEIGHT = 0.3, 0.2
 FOREARM_WEIGHT = 2.0
 MAX_STEP = 0.1  # rad per IK iteration: with the fist weighted LINE_WEIGHT, unlimited steps jumped into joint limits
 HIP_TURN = np.radians(-13.0)  # pelvis yaw at contact, the lead hip forward (the coach: -12 to -15)
-PELVIS_SHIFT = 0.022 * H  # m toward the target at contact (the coach: 0.025-0.03 H, kept under 0.7 g on 0.17 s)
+SHIFT_LEAD = 1  # frames the pelvis' shift toward the target starts before the fist, in every jab
 REAR_TURN, REAR_HEEL_UP = np.radians(-7.0), np.radians(10.0)  # the rear foot turns out with the hips, its heel rises
 OPPONENT = 1.0  # m from the pelvis to the opponent's centre line, along which the fist aims
 # The waist turn: the clip's size, on the body's timing. On the clip's own it started 0.3 s before the fist and gave
@@ -87,6 +87,32 @@ TARGETS = {
 STRIKES = {"jab": ("head", False), "jab_body": ("body", False), "step_jab": ("head", True)}
 
 
+class Shift(NamedTuple):
+    """The pelvis toward the target in a strike, on top of the feet."""
+
+    size: float
+    """m in all."""
+    top: int | None
+    """frames from contact to the top; None: as many as from the start to contact, fastest at contact."""
+    back: int
+    """frames back to the guard."""
+
+
+# Moving at contact, the rest after it, back by contact + 0.4 s. Stopped at contact (0.022 H, back in 0.23-0.3 s) the
+# jab braked the zero-moment point 5 cm past the lead toe and came back with it 12 cm behind the rear ball: no robot
+# does that on its feet, and the trained one kept its pelvis still. Carried on to 0.035 H and back over 0.5 s, the
+# body still went in after the fist was home, with 0.67 of the weight on a lead leg that then can't check a low kick,
+# and was forward when a counter lands, 0.4 s after contact. These are the K-1 coach's: 0.015-0.025 H at contact,
+# 8-17 kg m/s of body momentum standing (25-40 stepping in), balance margins of 3 cm and more. The body jab's drop
+# already carries the body forward, and its start was the tightest point of all; the step jab holds its weight
+# forward until the rear foot is down.
+SHIFTS = {
+    "jab": Shift(0.028 * H, 5, 9),
+    "jab_body": Shift(0.022 * H, None, 8),
+    "step_jab": Shift(0.035 * H, None, 9),
+}
+
+
 @cache
 def profile(speed: float = SPEED) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     """Per output frame (the clip's 30 fps, ``speed`` times faster): the lead fist's extension and the torso's turn."""
@@ -111,22 +137,23 @@ def profile(speed: float = SPEED) -> tuple[NDArray[np.float64], NDArray[np.float
 
 
 def body_ramp(
-    extension: NDArray[np.float64], lead: int, back: int, hold: int = 0, late: int = 0
+    extension: NDArray[np.float64], lead: int, back: int, hold: int = 0, late: int = 0, *, top: int = 0
 ) -> NDArray[np.float64]:
-    """The body's part in a strike: 0 in guard, 1 at contact, by minimum jerk.
+    """The body's part in a strike: 0 in guard, 1 ``top`` frames after contact, by minimum jerk.
 
     Contact is ``late`` frames after the fist's full reach. Up from ``lead`` frames before the fist leaves the guard;
-    held ``hold`` frames after contact, then down over ``back`` frames.
+    held ``hold`` frames after the top, then down over ``back`` frames.
     """
     onset, peak = int(np.argmax(extension > 0.05)) + late, int(np.argmax(extension)) + late  # noqa: PLR2004
+    top += peak
     frames = np.arange(len(extension))
-    up = np.clip((frames - (onset - lead)) / (peak - onset + lead), 0.0, 1.0)
-    down = np.clip((frames - peak - hold) / back, 0.0, 1.0)
+    up = np.clip((frames - (onset - lead)) / (top - onset + lead), 0.0, 1.0)
+    down = np.clip((frames - top - hold) / back, 0.0, 1.0)
 
     def jerk(s: NDArray[np.float64]) -> NDArray[np.float64]:
         return 10 * s**3 - 15 * s**4 + 6 * s**5
 
-    return np.where(frames <= peak, jerk(up), 1.0 - jerk(down))
+    return np.where(frames <= top, jerk(up), 1.0 - jerk(down))
 
 
 class Arm(NamedTuple):
