@@ -47,11 +47,46 @@ distance 0.9-1.1 reach (step jab), double jab, body jabs (25-30%), feints last (
 
 Generated jab (`k1/strikes.py`), after two of the coach's reviews: the first version "hit with the forearm, a slap"
 (elbow bent 44 deg at contact, upper arm below horizontal, fist on its side, hips still), the second missed 11 cm to
-the right and gave the jab away by turning the shoulder 0.3 s early. Its reference fist stops at full extension, so
-**the target surface in the duel sits 2-3 cm short of it**: the arm is then bent 34-43 deg and the fist moves at
-1.4-1.7 m/s (2 m/s in the step jab, which lands the fist before the foot with the body still moving). Further short
-the arm is bent like the slap again (60 deg at 8-10 cm). So the clean-hit speed threshold for the jab goes under
-~1.3 m/s, or the reference jab can never score.
+the right and gave the jab away by turning the shoulder 0.3 s early. Its reference fist stops at full extension in
+the air; its speed peaks (3.3 m/s) 22-30 cm before that and is down to 1.2 m/s 2.5 cm before it. So a target is
+**punched through, not at** (the coach): the surface sits 0.02-0.12 H inside full reach, the fist meets it fast, sinks
+as far as it gives and comes straight back. A hit is scored by its impulse in the first 40 ms, never the total.
+
+On a T800 head the jab aimed at 1.50 m runs under the head's collision sphere: aim it at 1.56-1.64 m, 0.045-0.075 m
+toward the centre. The standing jab's range against a T800 is 0.96-0.97 m pelvis to pelvis (1.2 m is step-jab range).
+
+**Check a reference on the feet, not only by eye.** The coach-approved jab stopped the pelvis dead at contact and
+snapped it back: by inverse dynamics its zero-moment point went 5 cm past the lead toe and 12 cm behind the rear ball.
+No robot can do that standing, and five reward variants could not make the trained one shift its pelvis. The friction
+check had passed. Now the pelvis is still moving at contact (`strikes.SHIFTS`, the coach's numbers), with margins of
++6.5 cm (jab) and +4.2 cm (body jab); the training floor's friction is 0.5 (rubber on a dry ring), and every move of
+the generator fits it.
+
+### The makiwara (`Fightclab-K1-Makiwara-T800`, `k1/makiwara.py`)
+
+Trained without a target, the jab pushed a makiwara 20 cm inside its reach like a wall for 0.12 s and shoved itself
+25 cm back. A spring post (about 5 kg at the pad) now pops up in front of every strike of the motion, at a random
+depth inside the reference fist's full reach (0.02-0.12 H; the step jab 0.02-0.06 H, a target beyond standing reach)
+and side, re-anchored on the robot. The policy doesn't see it. While the fist touches it, only the fist's height is
+tracked. Paid: the first 40 ms of impulse, less what comes back into the trunk (all but the lead arm) as the touch
+ends, so the body carried in and the legs braced both pay and an arm hitting harder than the body holds doesn't.
+A touch over 80 ms forfeits and costs; the worst of the pelvis and feet falling behind the reference's travel in a
+strike costs. Measured in the training env (512 envs, ~800 strikes per checkpoint, the RL reviewer's dump):
+
+| | before the makiwara (v23, pad at 20 cm) | mk4 (passed by the coach) |
+|---|---|---|
+| contact | 0.12 s, a push | 60 ms, pushes 0-1% |
+| impulse in the first 40 ms | 13.6 of 44 N s | 16-22 N s, 79-90% of the total |
+| fist at touch | 2.75 m/s | 3.0-3.4 m/s |
+| pelvis behind its pre-jab spot after the hit | 24.5 cm | median 0.3-0.5 cm; over 1.75 cm in 22-26% of standing jabs |
+| body momentum at touch | -5.6 to +7 kg m/s | 14 / 17 / 25 (jab / body jab / step jab) |
+
+Lessons on the way: paying the impulse alone bought it with arm speed and chest turn and shoved the robot back (the
+hit exceeded the body's momentum in 100% of hits); torso-anchored terms let the robot move its lead foot back instead
+of its body forward. The recoil tail comes from the deepest pads, where the jab is jammed (elbow bent 80-90 deg).
+Still open: the fist slides 5-7 cm up the pad during a touch (the arm pushes upward from a 1.34 m shoulder), so on a
+glove it may climb over (score catches by impulse into the surface and count follow-through head touches); the step
+jab carries 24 kg m/s of the reference's 37-44.
 
 Tracking it (`Fightclab-K1-Footwork-Tracking-T800`, from the footwork policy): with mjlab's tracking alone the robot
 kept its forearm up by its head, the fist 13 cm short: averaged over 14 bodies, one fist's error costs almost nothing
@@ -84,7 +119,7 @@ survivable, 60% is a knockdown. Next: per limb (one knee, the legs, the arms), a
 
 | Need | mjlab | Work |
 |---|---|---|
-| two T800s in a scene | `SceneCfg.entities` is a dict; per-entity offset via `init_state` | add `"opponent"`, 1.2 m away, turned 180 deg |
+| two T800s in a scene | `SceneCfg.entities` is a dict; per-entity offset via `init_state` | add `"opponent"`, 0.965 m away, turned 180 deg |
 | actions for the second robot | `ActionTermCfg.entity_name` | an action term with `action_dim` 0 that computes its own targets |
 | frozen policy in the env | not supported | load TorchScript/ONNX in that term (pattern: `LearnedActuator`) |
 | fist hits head or glove | `ContactMatch` per entity, `found`/`force`/`pos` | one sensor per target (head, torso, gloves) |
@@ -141,7 +176,7 @@ frames (`preprocess/vitpose.pt`, keypoints 9, 10, 15, 16).
 | Tier | Hard part | Moves | Status |
 |---|---|---|---|
 | 0 movement | | stance, steps, switch stance, head movement | stance and steps on T800 |
-| 1 hands, feet planted | arms and torso turn | jab, cross, hooks, uppercuts (head and body); high and low block | next: jab and catch |
+| 1 hands, feet planted | arms and torso turn | jab, cross, hooks, uppercuts (head and body); high and low block | jab passed (makiwara mk4); next: catch |
 | 2 hands with the body | big turn, weight shift | overhands, elbows | |
 | 3 low kicks | short single-leg support | lead and rear leg kicks, front kick (teep), side and oblique kicks to the leg; leg catch | |
 | 4 mid and high kicks | long single-leg support, hip range | body and head kicks, switch kick, side kicks, knees, question mark, axe | |
@@ -159,4 +194,7 @@ Sources for the list: [EA's UFC 4 manual](https://ea.com/able/resources/ufc/ufc-
 ## Open questions
 
 - Main fighter: CLAUDE.md still names G1 and `Fightclab-Duel-G1`; all the K-1 work is on T800.
-- The clean-hit threshold on robots with video-speed clips: calibrate on statue hits.
+- The clean-hit threshold on robots with video-speed clips: calibrate on statue hits (the makiwara's 40 ms impulse is
+  a start: 16-22 N s for a passed jab).
+- Jabs to any target: the generator should draw each strike's height, side and step length, so the tracker hits where
+  the duel policy aims instead of three fixed points.

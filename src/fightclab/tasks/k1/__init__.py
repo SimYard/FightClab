@@ -5,6 +5,7 @@ Tasks:
   The K-1 coach failed its footwork on every command (it leaned instead of stepping, squared up and hopped going
   back, lunged and skidded sideways), so the footwork is now tracked instead:
 - ``Fightclab-K1-Footwork-Tracking-T800``: T800 tracks generated footwork and jabs (``steps.py``, ``strikes.py``).
+- ``Fightclab-K1-Makiwara-T800``: the same with a makiwara in front of every jab, to hit, not push (``makiwara.py``).
 - ``Fightclab-K1-Tracking-T800``: T800 tracks ``MOTION_T800``, the K-1 clip made by GVHMR, ``tools/gvhmr_to_csv.py``,
   ``video_motion ... --ground`` and ``motion_npz ... <out.npz>``. The kick task's setup without its flight reward:
   these motions stay on the floor.
@@ -24,8 +25,16 @@ from mjlab.tasks.velocity.rl import VelocityOnPolicyRunner
 
 from fightclab.tasks.helicopter_kick.env_cfg import FEET
 from fightclab.tasks.helicopter_kick.tracking import helicopter_kick_tracking_env_cfg, ppo_runner_cfg
+from fightclab.tasks.k1 import makiwara
 from fightclab.tasks.k1.footwork import still_head_action_scale, t800_footwork_env_cfg, t800_footwork_ppo_runner_cfg
-from fightclab.tracking import bodies_pos, body_ang_vel_error_xy, feet_contact_slip, joint_vel_error_l2
+from fightclab.tracking import (
+    BodiesTravel,
+    bodies_pos,
+    body_ang_vel_error_xy,
+    feet_contact_slip,
+    feet_height,
+    joint_vel_error_l2,
+)
 
 MOTION_T800 = Path(__file__).parent / "k1_t800.npz"
 # Generated K-1 step-drags and jabs on random commands (``steps ... random:600``, then ``motion_npz``), on the stance
@@ -109,6 +118,18 @@ def t800_k1_footwork_tracking_env_cfg(play: bool = False) -> ManagerBasedRlEnvCf
         weight=2.0,
         params={"command_name": "motion", "std": 0.15, "body_names": ("LINK_ANKLE_ROLL_R",)},
     )
+    # The pelvis and feet travel as the reference's over 0.3 s (``BodiesTravel``): the step jab's 4.9 cm off earned
+    # 0.41 at this width, footwork 0.58-0.72, standing jabs 0.74-0.79 (on the trained robot's rollout).
+    cfg.rewards["travel"] = RewardTermCfg(
+        func=BodiesTravel,
+        weight=2.0,
+        params={
+            "command_name": "motion",
+            "body_names": ("LINK_BASE", "LINK_ANKLE_ROLL_L", "LINK_ANKLE_ROLL_R"),
+            "std": 0.04,
+            "steps": 15,
+        },
+    )
     # The K-1 coach failed its back step: the lead foot slid back 8.8 cm per step flat on the floor before lifting
     # (the reference: 0.2 cm), and a foot dragged like that can't lift to check a low kick. At -1 it cost 3% of the
     # feet's height reward and barely fell in 600 iterations.
@@ -124,6 +145,23 @@ def t800_k1_footwork_tracking_env_cfg(play: bool = False) -> ManagerBasedRlEnvCf
     # feet for more than 0.3, and its centre of mass stayed 2 cm behind the jab and 5 cm behind the step jab, as far as
     # 0.3 allows (the RL review); the generator keeps every move within 0.5.
     cfg.events["foot_friction"].params["ranges"] = (0.5, 1.2)
+    return cfg
+
+
+def t800_k1_makiwara_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+    """The footwork and jabs with a makiwara in front of every strike (``makiwara.py``)."""
+    cfg = t800_k1_footwork_tracking_env_cfg(play)
+    cfg.scene.entities[makiwara.ENTITY] = makiwara.makiwara_entity()
+    cfg.scene.sensors = (*cfg.scene.sensors, makiwara.makiwara_hits())
+    cfg.rewards["fists"].func = makiwara.fists_on_makiwara
+    # One 15 N s hit earns what a third of a second of the fists' tracking does.
+    cfg.rewards["makiwara"] = RewardTermCfg(func=makiwara.Makiwara, weight=50.0, params={"command_name": "motion"})
+    # The body jab's drop: the pelvis is 1 of 14 bodies in the body tracking, the root position's tolerance had grown
+    # to 17 cm, and the high fist went untracked on the pad; trained with the makiwara the drop shrank to 0.03 H of
+    # 0.045 (the RL review).
+    cfg.rewards["pelvis_height"] = RewardTermCfg(
+        func=feet_height, weight=2.0, params={"command_name": "motion", "body_names": ("LINK_BASE",), "std": 0.03}
+    )
     return cfg
 
 
@@ -146,6 +184,14 @@ register_mjlab_task(
     task_id="Fightclab-K1-Footwork-Tracking-T800",
     env_cfg=t800_k1_footwork_tracking_env_cfg(),
     play_env_cfg=t800_k1_footwork_tracking_env_cfg(play=True),
+    rl_cfg=t800_k1_footwork_tracking_ppo_runner_cfg(),
+    runner_cls=MotionTrackingOnPolicyRunner,
+)
+
+register_mjlab_task(
+    task_id="Fightclab-K1-Makiwara-T800",
+    env_cfg=t800_k1_makiwara_env_cfg(),
+    play_env_cfg=t800_k1_makiwara_env_cfg(play=True),
     rl_cfg=t800_k1_footwork_tracking_ppo_runner_cfg(),
     runner_cls=MotionTrackingOnPolicyRunner,
 )

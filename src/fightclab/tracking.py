@@ -80,6 +80,46 @@ def bodies_pos(env: ManagerBasedRlEnv, command_name: str, body_names: tuple[str,
     return torch.exp(-error.square().sum(dim=-1).mean(dim=-1) / std**2)
 
 
+class BodiesTravel:
+    """How far ``body_names`` moved on the floor over the last ``steps``, against the reference's: exp(-error / std**2).
+
+    The error is the mean squared difference of the two displacements; the reward is 1 until ``steps`` into an
+    episode or the motion.
+
+    Body tracking re-anchored on the robot ignores the whole robot standing back, and the anchor's world position
+    drifts further in an episode (T800: 5-8 cm) than a jab moves the pelvis (4 cm). A short window sees the travel and
+    not the drift: T800's step jab landed the fist with the pelvis and lead foot left behind, and its rear foot stepped
+    back 1-2 cm in a jab and 6 cm in the step jab where the reference's stays put.
+    """
+
+    def __init__(self, cfg: RewardTermCfg, env: ManagerBasedRlEnv) -> None:
+        """A ring of the bodies' last ``steps`` floor positions."""
+        motion = env.command_manager.get_term(cfg.params["command_name"])
+        assert isinstance(motion, MotionCommand)
+        self.bodies = [motion.cfg.body_names.index(name) for name in cfg.params["body_names"]]
+        self.past = torch.zeros(cfg.params["steps"], env.num_envs, len(self.bodies), 2, device=env.device)
+        self.step = 0
+
+    def __call__(
+        self, env: ManagerBasedRlEnv, *, command_name: str, body_names: tuple[str, ...], std: float, steps: int
+    ) -> torch.Tensor:
+        """The reward for this step; stores the bodies' positions for ``steps`` later."""
+        del body_names
+        motion = env.command_manager.get_term(command_name)
+        assert isinstance(motion, MotionCommand)
+        now = motion.robot_body_pos_w[:, self.bodies, :2]
+        slot = self.step % steps
+        moved = now - self.past[slot]
+        self.past[slot] = now
+        self.step += 1
+        ref = motion.motion.body_pos_w[:, self.bodies, :2]
+        ref_moved = ref[motion.time_steps] - ref[(motion.time_steps - steps).clamp(min=0)]
+        # The slot was written before a reset (or the motion's restart) until ``steps`` steps after it.
+        valid = (env.episode_length_buf > steps) & (motion.time_steps >= steps)
+        error = (moved - ref_moved).square().sum(dim=-1).mean(dim=-1)
+        return torch.where(valid, torch.exp(-error / std**2), 1.0)
+
+
 def body_ang_vel_error_xy(env: ManagerBasedRlEnv, command_name: str, body_names: tuple[str, ...]) -> torch.Tensor:
     """Squared roll and pitch rate of ``body_names`` off the reference's, summed.
 

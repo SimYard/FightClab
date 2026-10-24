@@ -33,9 +33,10 @@ from fightclab.tasks.k1.strikes import (
     HIP_TURN,
     LEAD_ARM,
     OPPONENT,
-    PELVIS_SHIFT,
     REAR_HEEL_UP,
     REAR_TURN,
+    SHIFT_LEAD,
+    SHIFTS,
     STEP_LATE,
     STRIKES,
     TARGETS,
@@ -186,9 +187,17 @@ def build(commands: list[tuple[str, float]], st: Stance = CLIP_STANCE) -> tuple[
         late = STEP_LATE if STRIKES[name][1] else 0
         ramp = body_ramp(extension, target.lead, target.back, late=late)
         span = slice(start, start + len(ramp))
-        # Stepping in, the weight stays forward until the rear foot is down (the coach: it unwound and backed up).
+        # The pelvis toward the target (``strikes.SHIFTS``), tops out ``coast`` frames after contact. Stepping in, the
+        # weight stays forward until the rear foot is down (the coach: it unwound and backed up). It starts with the
+        # fist even in a body jab: pushed forward while falling into the drop, the zero-moment point reached the rear
+        # ball's edge.
         follow = round(GAP * FPS) + round(SWING * FPS) if late else 0
-        rows[span, :2] += np.outer(body_ramp(extension, target.lead, target.back, follow, late), toward) * PELVIS_SHIFT
+        size, coast, back = SHIFTS[name]
+        if coast is None:
+            coast = int(np.argmax(extension)) - int(np.argmax(extension > 0.05)) + SHIFT_LEAD  # noqa: PLR2004
+        shift = body_ramp(extension, SHIFT_LEAD, back, max(follow - coast, 0), late, top=coast)
+        assert shift[-1] == ramp[-1] == 0, "a body ramp outlasts the strike: raise strikes.PAD"
+        rows[span, :2] += np.outer(shift, toward) * size
         rows[span, 2] -= ramp * target.drop
         rows[span, 3:7] = Rotation.from_euler(
             "ZYX", np.c_[HIP_TURN * ramp, st.pitch + target.lean * ramp, 0 * ramp]
