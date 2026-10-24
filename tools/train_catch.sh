@@ -3,7 +3,7 @@
 #
 #   tools/train_catch.sh CHECKPOINT.pt [ITERATIONS=1500]     (ENVS=4096 by default; fewer on a smaller GPU)
 #
-# Run it from a clone of the repo at branch k1-catch. It installs uv if needed, syncs the environment, generates the
+# Run it from a clone of the repo. It installs uv if needed, syncs the environment, generates the
 # training motion (~/fw_clips/steps_t800.*, about 600 s of moves, jabs and catches) and resumes training from
 # CHECKPOINT, a policy of Fightclab-K1-Makiwara-T800 or Fightclab-K1-Footwork-Tracking-T800 (policies aren't in git).
 set -euo pipefail

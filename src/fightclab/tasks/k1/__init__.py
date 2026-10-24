@@ -101,6 +101,14 @@ def t800_k1_footwork_tracking_env_cfg(play: bool = False) -> ManagerBasedRlEnvCf
         weight=3.0,
         params={"command_name": "motion", "body_names": ("LINK_WRIST_END_L", "LINK_WRIST_END_R"), "std": 0.05},
     )
+    # The catch's rear arm from afar: 10 cm off, the fists' width paid 1% and pulled nothing, and the trained glove
+    # stayed out by the cheek with the elbow wide. The elbow too, or a flat forearm with the elbow up and out would earn
+    # it (the K-1 coach). As much as the fists.
+    cfg.rewards["rear_arm"] = RewardTermCfg(
+        func=bodies_pos,
+        weight=3.0,
+        params={"command_name": "motion", "body_names": ("LINK_WRIST_END_R", "LINK_ELBOW_PITCH_R"), "std": 0.15},
+    )
     # The torso over the stance: the jab's arm pushed the rest of the body back, the pelvis 0.008 H back where the
     # reference's goes 0.022 H in (the step jab: 0.012 of 0.063). Body and fist tracking, re-anchored on the robot's
     # torso, pay nothing for it but through the ankles, and the anchor's world position drifts 9 cm by then. The ankles

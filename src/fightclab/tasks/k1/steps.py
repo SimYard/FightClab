@@ -81,7 +81,7 @@ TRAIN_STRIKES = ("step_jab", "jab", "jab_body")
 # Unit moves in the opponent's frame (forward, left) and which foot steps first (0 left/lead, 1 right/rear).
 COMMANDS = {"forward": ((1, 0), 0), "back": ((-1, 0), 1), "left": ((0, 1), 0), "right": ((0, -1), 1), "stop": None}
 CATCH = "catch"  # the rear-hand catch of a head jab (``catch.py``)
-CATCH_SHARE = 0.35  # of the moves in random_commands followed by a catch (about one every 8 s, as many as jabs)
+CATCH_SHARE = 0.35  # of the moves in random_commands followed by a catch (one every 15 s, as many as head jabs)
 
 
 class Aim(NamedTuple):

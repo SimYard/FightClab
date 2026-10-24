@@ -26,9 +26,12 @@ HEAD = "LINK_HEAD_YAW"
 # a chin-high jab, a jab to the face's centre met its top edge at 27 deg and slid into the forehead (the coach). Left
 # of this the shoulder's roll is at its limit (0.384 rad) and the lead glove, 8 mm away, covers the rest.
 INTERCEPT = np.array((0.201, -0.056, 0.000))
-# The arm at the catch (the coach's IK at INTERCEPT): the forearm 58 deg up and 32 deg across, no forward lean; the
-# elbow 3 cm in and 2 cm up from its guard spot.
-CATCH_POSE = dict(zip(REAR_ARM, (-1.376, 0.384, 0.607, -1.519, -0.209), strict=True))
+# The shoulder's roll stays this far from its limit: a target at the stop leaves the tracker no room and sends a hit on
+# the glove into the stop (the coach). The glove then holds 0.5 cm off INTERCEPT, and the gloves still overlap seen
+# from the front.
+ROLL_MARGIN = np.radians(5.0)
+# The arm at the catch (the IK at INTERCEPT, the roll ROLL_MARGIN short): the forearm 56 deg up, 2.1 cm from the head.
+CATCH_POSE = dict(zip(REAR_ARM, (-1.424, 0.297, 0.659, -1.521, -0.209), strict=True))
 PRIOR_WEIGHT = 0.3  # how hard the IK holds each joint near the path between the guard and CATCH_POSE
 OUT, HOLD, BACK = 4, 5, 6  # frames at 30 fps: out in 0.133 s, in place 0.05 s before contact to 0.1 s after, back 0.2 s
 IN_LAG = 0.25  # of the way out before the glove starts in
@@ -54,6 +57,7 @@ def _progress(i: int) -> tuple[float, float]:
 def catch(m: mujoco.MjModel, d: mujoco.MjData, adr: NDArray[np.int_], rows: NDArray[np.float64]) -> None:
     """The catch in ``rows`` (its frames, the body still, the arms in guard); ``adr``: the rows' joints in qpos."""
     arm = arm_chain(m, "R")
+    arm.hi[REAR_ARM.index("J19_SHOULDER_ROLL_R")] -= ROLL_MARGIN
     cols = 7 + np.array([list(adr).index(q) for q in arm.qadr])
     head = m.body(HEAD).id
     x = np.array((np.cos(OPPONENT_YAW), np.sin(OPPONENT_YAW), 0.0))
