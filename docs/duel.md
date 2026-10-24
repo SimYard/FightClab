@@ -97,6 +97,32 @@ targets, all 5-8 cm to the lead side; the step jab carries 27 kg m/s, the standi
 step adds little reach (0.757 m at 0.10 m, 0.793 m at 0.25 m): the fist lands before the lead foot, most of the step
 still to come.
 
+**The catch** (`k1/catch.py`, mkc1-mkc2): the rear glove (the end of the right forearm) goes forward, then in, to an
+intercept 0.20 m in front of the head and 0.056 m right of its centre, holds there 0.17 s and comes back the same way;
+nothing else moves. The training motion mixes catches in, as many as head jabs. With only the fists' 5 cm wide term
+(mkc1, 1200 iterations) the glove stayed 9-10 cm off, out by the cheek with the elbow 7 cm wide: 10 cm off with the
+lead fist on target, that term pays 13%. Two changes got it there (mkc2, 1500 iterations): the reference arm keeps the shoulder's roll 5 deg off
+its stop (the coach: a target at the stop leaves the tracker no room and sends a hit on the glove into the stop), and
+a 15 cm wide term on the rear glove and elbow (with the glove alone, a flat forearm with the elbow up and out would
+earn it). The coach's checks, in the opponent frame at the head:
+
+1. cover: through the hold the glove within 2.5 cm of the reference's seen from the front, from 3 cm behind it to
+   4 cm in front;
+2. on time: there by +0.15 s (the earliest fist arrives at +0.17 s);
+3. elbow: within 3 cm of the reference's, 8-14 cm below the glove;
+4. clear: the forearm 1 cm or more from the head;
+5. still: the lead glove within 2.5 cm, the torso's pitch within 5 deg and yaw within 4 deg, the glove back within
+   4 cm of its guard 0.15 s after.
+
+| check | mkc1 | mkc2 |
+|---|---|---|
+| cover | 0/5, 9-10 cm off | 3/5, the misses 2.5 and 2.9 cm |
+| on time | 0/5 | 4/5, the late one at +0.16 s |
+| elbow, clear, still | 0/5, 5/5, 5/5 | 5/5, 5/5, 5/5 |
+
+The jab kept its 40 ms impulse (20 / 25 / 20 N s) and the step jab its 28 kg m/s; the standing jab's recoil tail grew
+from 15% to 26%. Whether the catch holds a real jab is the next test, against a second T800.
+
 Tracking it (`Fightclab-K1-Footwork-Tracking-T800`, from the footwork policy): with mjlab's tracking alone the robot
 kept its forearm up by its head, the fist 13 cm short: averaged over 14 bodies, one fist's error costs almost nothing
 (the kick's foot had the same problem, hence `feet_height`). A reward on the fists alone (`bodies_pos`, weight 3,
@@ -193,7 +219,7 @@ frames (`preprocess/vitpose.pt`, keypoints 9, 10, 15, 16).
 | Tier | Hard part | Moves | Status |
 |---|---|---|---|
 | 0 movement | | stance, steps, switch stance, head movement | stance and steps on T800 |
-| 1 hands, feet planted | arms and torso turn | jab, cross, hooks, uppercuts (head and body); high and low block | jab passed (makiwara mk4); next: catch |
+| 1 hands, feet planted | arms and torso turn | jab, cross, hooks, uppercuts (head and body); high and low block | jab passed (makiwara mk4), aimed (mk6); catch on command (mkc2); next: a scripted jabber |
 | 2 hands with the body | big turn, weight shift | overhands, elbows | |
 | 3 low kicks | short single-leg support | lead and rear leg kicks, front kick (teep), side and oblique kicks to the leg; leg catch | |
 | 4 mid and high kicks | long single-leg support, hip range | body and head kicks, switch kick, side kicks, knees, question mark, axe | |
