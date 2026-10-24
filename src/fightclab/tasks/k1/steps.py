@@ -1,6 +1,7 @@
 """K-1 footwork and jabs generated from the K-1 coach's measures, on the stance and guard of the Varga clips.
 
     uv run python -m fightclab.tasks.k1.steps OUT.csv forward:4 stop:2 back:4 left:4 right:4 stop:2 jab:1 step_jab:1.5
+    uv run python -m fightclab.tasks.k1.steps OUT.csv stop:1 jab:1@1.60,0.06 step_jab:1.5@1.56,0.05,0.22 (aimed)
     uv run python -m fightclab.tasks.k1.steps OUT.csv random:600      (random commands for ~600 s, to train on)
 
 Each move command moves the stance in step-drags: the foot nearer the direction (the lead foot going forward or left,
@@ -18,6 +19,7 @@ off (STANCE_WIDTH, LEAD_TOE_OUT, REAR_HEEL).
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 import mujoco
 import numpy as np
@@ -78,6 +80,22 @@ TRAIN_STRIKES = ("step_jab", "jab", "jab_body")
 COMMANDS = {"forward": ((1, 0), 0), "back": ((-1, 0), 1), "left": ((0, 1), 0), "right": ((0, -1), 1), "stop": None}
 
 
+class Aim(NamedTuple):
+    """Where a strike goes: its target's height and side (``strikes.Target``) and, stepping in, the step's length."""
+
+    height: float
+    side: float
+    step: float = STEP_LENGTH
+
+
+# Training strikes go anywhere on the target, so the tracker hits where the duel policy aims, not three fixed points
+# (m: target height, side). The head: chin to forehead of a T800 in guard, whose face's centre is at 1.56-1.64 m and
+# 0.045-0.075 m toward the centre line (the K-1 coach; the old fixed 1.50 m ran under the head's collision sphere).
+AIMS = {"head": ((1.50, 1.66), (0.0, 0.09)), "body": ((1.15, 1.30), (0.0, 0.06))}
+STEP_RANGE = (0.10, 0.25)  # m, the step jab's step (the K-1 coach's 10-25 cm): reach beyond standing range
+Command = tuple[str, float] | tuple[str, float, Aim]
+
+
 @dataclass(frozen=True)
 class Stance:
     """The stance in the pelvis' heading frame (x along the heading, y left)."""
@@ -105,17 +123,17 @@ CLIP_STANCE = Stance(
 
 
 def plan(
-    commands: list[tuple[str, float]], st: Stance
-) -> tuple[NDArray[np.float64], NDArray[np.float64], list[str], list[tuple[int, str]]]:
-    """The feet on the floor (2, N, 2), the soles' lift (2, N), each frame's command, and each strike's first frame.
+    commands: list[Command], st: Stance
+) -> tuple[NDArray[np.float64], NDArray[np.float64], list[str], list[tuple[int, str, Aim | None]]]:
+    """The feet on the floor (2, N, 2), the soles' lift (2, N), each frame's command, each strike's first frame and aim.
 
-    The world here has the pelvis heading along +x.
+    The world here has the pelvis heading along +x. A strike without an aim goes to its ``strikes.TARGETS`` target.
     """
     yaw0 = OPPONENT_YAW  # the opponent's direction from the pelvis' heading (+x)
     to_world = np.array(((np.cos(yaw0), -np.sin(yaw0)), (np.sin(yaw0), np.cos(yaw0))))
     feet = st.feet.copy()
     pos, lift, labels = [], [], []
-    strikes: list[tuple[int, str]] = []
+    strikes: list[tuple[int, str, Aim | None]] = []
 
     def hold(seconds: float, name: str) -> None:
         for _ in range(round(seconds * FPS)):
@@ -138,11 +156,12 @@ def plan(
     cycle = 2 * SWING + GAP + REST
     extension = profile()[0]
     peak, n = int(np.argmax(extension)), round(STEP_SWING * FPS)
-    for name, seconds in commands:
+    for name, seconds, *rest in commands:
         if name in STRIKES:  # the feet hold, or the lead foot steps in to land with the fist and the rear follows
-            strikes.append((len(pos), name))
+            aim = rest[0] if rest else None
+            strikes.append((len(pos), name, aim))
             if STRIKES[name][1]:  # the coach: it lands with the fist, never before; the rear follows within 0.3 s
-                move = to_world @ np.array((1.0, 0.0)) * STEP_LENGTH
+                move = to_world @ np.array((1.0, 0.0)) * (aim.step if aim else STEP_LENGTH)
                 hold((peak + 1 + STEP_LATE - n) / FPS, name)
                 swing(0, move, name, STEP_JAB_LIFT, STEP_SWING)
                 hold(GAP, name)
@@ -165,7 +184,13 @@ def plan(
     return np.array(pos).transpose(1, 0, 2), np.array(lift).T, labels, strikes
 
 
-def build(commands: list[tuple[str, float]], st: Stance = CLIP_STANCE) -> tuple[NDArray[np.float64], list[str]]:
+def aimed(name: str, aim: Aim | None) -> Target:
+    """The strike's target, moved to ``aim``'s height and side."""
+    target = TARGETS[STRIKES[name][0]]
+    return target if aim is None else target._replace(height=aim.height, side=aim.side)
+
+
+def build(commands: list[Command], st: Stance = CLIP_STANCE) -> tuple[NDArray[np.float64], list[str]]:
     """The motion's rows (30 fps: root pos, quat xyzw, joints) and each row's command."""
     feet, lift, labels, strikes = plan(commands, st)
     m, d, adr = model(ROBOT)
@@ -182,8 +207,8 @@ def build(commands: list[tuple[str, float]], st: Stance = CLIP_STANCE) -> tuple[
     extension = profile()[0]
     toward = np.array((np.cos(OPPONENT_YAW), np.sin(OPPONENT_YAW)))
     rear = np.zeros(len(rows))  # how far into the strike the rear foot is, 0 to 1
-    for start, name in strikes:
-        target = TARGETS[STRIKES[name][0]]
+    for start, name, point in strikes:
+        target = aimed(name, point)
         late = STEP_LATE if STRIKES[name][1] else 0
         ramp = body_ramp(extension, target.lead, target.back, late=late)
         span = slice(start, start + len(ramp))
@@ -231,8 +256,8 @@ def build(commands: list[tuple[str, float]], st: Stance = CLIP_STANCE) -> tuple[
         rows[i, 7:] = joints
     for name, angle in GUARD_POSE.items():
         rows[:, 7 + ROBOT.joints.index(name)] = angle
-    for start, name in strikes:
-        strike(m, d, adr, rows[start : start + len(extension)], TARGETS[STRIKES[name][0]])
+    for start, name, point in strikes:
+        strike(m, d, adr, rows[start : start + len(extension)], aimed(name, point))
     return rows, labels
 
 
@@ -278,15 +303,21 @@ def strike(
         rows[i, cols] = joints
 
 
-def random_commands(seconds: float, seed: int = 0) -> list[tuple[str, float]]:
-    """Moves of 1-4 s in random order, each followed by a strike and by a stop half the time; about ``seconds`` long."""
+def random_commands(seconds: float, seed: int = 0) -> list[Command]:
+    """Moves of 1-4 s in random order, each followed by a strike and by a stop half the time; about ``seconds`` long.
+
+    Each strike goes to a random ``AIMS`` point, stepping in by a random ``STEP_RANGE`` step.
+    """
     rng = np.random.default_rng(seed)
-    out: list[tuple[str, float]] = [("stop", 1.0)]
+    out: list[Command] = [("stop", 1.0)]
     moves = [c for c in COMMANDS if c != "stop"]
-    while sum(s for _, s in out) < seconds:
+    while sum(c[1] for c in out) < seconds:
         out.append((str(rng.choice(moves)), float(rng.uniform(1.0, 4.0))))
         if rng.random() < 0.5:  # noqa: PLR2004
-            out.append((str(rng.choice(TRAIN_STRIKES)), float(rng.uniform(0.8, 1.5))))
+            name = str(rng.choice(TRAIN_STRIKES))
+            (low, high), (left, right) = AIMS[STRIKES[name][0]]
+            point = Aim(float(rng.uniform(low, high)), float(rng.uniform(left, right)), float(rng.uniform(*STEP_RANGE)))
+            out.append((name, float(rng.uniform(0.8, 1.5)), point))
         if rng.random() < 0.5:  # noqa: PLR2004
             out.append(("stop", float(rng.uniform(0.5, 2.0))))
     return out
@@ -297,8 +328,13 @@ if __name__ == "__main__":
     args = sys.argv[2:]
     if args[0].startswith("random:"):
         commands = random_commands(float(args[0].split(":")[1]))
-    else:
-        commands = [(a.split(":")[0], float(a.split(":")[1])) for a in args]
+    else:  # NAME:SECONDS, a strike optionally @HEIGHT,SIDE[,STEP]
+        commands = []
+        for a in args:
+            head, _, at = a.partition("@")
+            name, seconds = head.split(":")
+            point = Aim(*(float(x) for x in at.split(","))) if at else None
+            commands.append((name, float(seconds), point) if point else (name, float(seconds)))
     rows, labels = build(commands)
     np.savetxt(out, rows, delimiter=",", fmt="%.6f")
     out.with_suffix(".labels.txt").write_text("\n".join(labels))
