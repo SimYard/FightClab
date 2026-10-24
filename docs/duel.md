@@ -17,6 +17,7 @@ UFC 4 move list (bottom).
 | [Spherical Latent Motion Prior 2026](https://arxiv.org/abs/2603.01294) | boxing, two policies swap every 250 epochs | Dense shaping made them stand close without striking; contact-only rewards made them punch repetitively. 8 h on 2x RTX 4090. |
 | [RoboStriker 2026](https://arxiv.org/abs/2608.16195) | two Unitree G1s, Isaac Lab, one RTX 4090, 4096 envs | Tracker, 32-d latent, warm-up against a standing opponent, then neural fictitious self-play. Failures: no warm-up gives ~0; a static-target specialist fails against a moving one; naive self-play cycles; joint-level self-play drops the guard. |
 | [MAAIP](https://arxiv.org/abs/2311.02502) | two boxers, one shared policy with an agent id | Parameter sharing works for symmetric fighters. |
+| [Kakuto AI 2026](https://ai.kakuto.io/blog/learning-to-block/) (Tony Yum) | a muscle-driven MuJoCo fighter checked by a Muay Thai coach; four blocks against a scripted puncher (jab, cross, hooks, uppercut) seen through 16 keypoints with 100 ms delay | A jab gives 0.10 s from its first visible move to landing, so a block can't wait for the fist. The fighter read giveaways instead of punches: the recording's start, a distance per punch type, a lower stance for the uppercut (fixed with 2 s of stance motion before every punch, one distance band, one head height), and was blind for five runs from an observation-normalisation bug. Damage = share of the fist's path that reaches the head before an arm stops it. No penalty for the gloves hiding the opponent (it would learn not to block), a small cost for a block held with no punch. Blocks on command first, then against the opponent with an auxiliary loss on the right block. Style rewards made its footwork worse ([walking post](https://ai.kakuto.io/blog/walking-in-the-stance/)); a frozen teacher (distillation) kept old skills. 117 of 160 punches blocked. |
 
 Hardware: Unitree's "Iron Fist King" bouts were [teleoperated](https://www.heise.de/en/news/Iron-Fist-Unitree-plans-boxing-match-between-humanoid-robots-10348477.html);
 nobody has shown a learned block on a real humanoid. The closest is [dodgeball on a G1](https://arxiv.org/abs/2607.28623), 95% dodged.
@@ -88,6 +89,14 @@ Still open: the fist slides 5-7 cm up the pad during a touch (the arm pushes upw
 glove it may climb over (score catches by impulse into the surface and count follow-through head touches); the step
 jab carries 24 kg m/s of the reference's 37-44.
 
+**Jabs to any target** (`steps.AIMS`, mk6): each training strike draws its target's height and side (head 1.50-1.66 m
+and 0-0.09 m, body 1.15-1.30 m and 0-0.06 m) and the step jab its step (0.10-0.25 m); the pad spans 1.05-1.72 m. The
+tracker then hits where the duel policy aims, not three fixed points. On mk6, at the touch: head and step jabs within
+2 cm of the reference fist's height over the whole range (90% within 3 cm), body jabs 3-4 cm high on the lowest
+targets, all 5-8 cm to the lead side; the step jab carries 27 kg m/s, the standing jab's recoil tail is 15%. A longer
+step adds little reach (0.757 m at 0.10 m, 0.793 m at 0.25 m): the fist lands before the lead foot, most of the step
+still to come.
+
 Tracking it (`Fightclab-K1-Footwork-Tracking-T800`, from the footwork policy): with mjlab's tracking alone the robot
 kept its forearm up by its head, the fist 13 cm short: averaged over 14 bodies, one fist's error costs almost nothing
 (the kick's foot had the same problem, hence `feet_height`). A reward on the fists alone (`bodies_pos`, weight 3,
@@ -108,6 +117,14 @@ survivable, 60% is a knockdown. Next: per limb (one knee, the legs, the arms), a
   of the body reward). The defender tracks legs and torso only, at fixed widths; arm penalties are gated off during jabs.
 - Defender sees the attacker's fists, elbows, head and torso (positions, fist velocities) in its own heading frame, 3-5
   frames, with noise and 20-140 ms delay. The attacker's phase and target go to the critic only.
+- Scripted jabber without giveaways (Kakuto AI's fighter read every one): random tempo with at least 2 s of stance
+  motion between attacks, one distance band and one head height for every attack, nothing correlated with the attack
+  but its own movement (the hip turn, then the fist). The defender's opponent inputs get their own normalisation
+  statistics, checked before training.
+- Defense score: the share of the fist's path that reaches the head before an arm stops it. No penalty for the
+  defender's own gloves hiding the opponent; a small cost for a catch thrown with no jab coming (T8).
+- Catch on command first (the tracker, then the duel policy picking it), with a dense term for the right skill while
+  a jab is coming; a frozen copy of the tracker as teacher keeps the footwork and jab while the catch is learned.
 - "Do nothing" control: if a statue is hit in under ~30% of jabs, change the attack (body jabs, second punch), not the
   defender's reward. A perfect blocker must beat the statue's return by 10% or more.
 - Frozen opponent inside the env: TorchScript or ONNX, its observations rebuilt exactly as trained, a zero-dim action
@@ -196,5 +213,3 @@ Sources for the list: [EA's UFC 4 manual](https://ea.com/able/resources/ufc/ufc-
 - Main fighter: CLAUDE.md still names G1 and `Fightclab-Duel-G1`; all the K-1 work is on T800.
 - The clean-hit threshold on robots with video-speed clips: calibrate on statue hits (the makiwara's 40 ms impulse is
   a start: 16-22 N s for a passed jab).
-- Jabs to any target: the generator should draw each strike's height, side and step length, so the tracker hits where
-  the duel policy aims instead of three fixed points.

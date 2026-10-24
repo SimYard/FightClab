@@ -31,9 +31,9 @@ if TYPE_CHECKING:
 ENTITY, SENSOR = "makiwara", "makiwara_hits"
 FIST = "LINK_WRIST_END_L"  # the lead fist
 ARM = re.compile("SHOULDER|ELBOW|WRIST")  # the lead arm's links, with an _L
-# A 1.55 m post on a spring hinge at the floor, padded from 1.15 to 1.55 m (head and body jabs): about 5 kg at the
-# pad, like a head, giving 4 cm under 300 N.
-POST_MASS, POST_HEIGHT, PAD = 12.0, 1.55, (1.15, 1.55)
+# A 1.75 m post on a spring hinge at the floor, padded from 1.05 to 1.72 m (body jabs aimed from 1.15 m to head jabs
+# at 1.66 m): about 5 kg at the pad, like a head, giving 4 cm under 300 N.
+POST_MASS, POST_HEIGHT, PAD = 10.0, 1.75, (1.05, 1.72)
 STIFFNESS, DAMPING = 13700.0, 230.0  # N m/rad
 PAD_DEPTH, POST_DEPTH = 0.1, 0.08  # m along the punch
 # The K-1 coach: aim a jab 5-10 cm behind the surface (the reference fist peaks at 3.3 m/s 22-30 cm before full
