@@ -81,6 +81,7 @@ TRAIN_STRIKES = ("step_jab", "jab", "jab_body")
 # Unit moves in the opponent's frame (forward, left) and which foot steps first (0 left/lead, 1 right/rear).
 COMMANDS = {"forward": ((1, 0), 0), "back": ((-1, 0), 1), "left": ((0, 1), 0), "right": ((0, -1), 1), "stop": None}
 CATCH = "catch"  # the rear-hand catch of a head jab (``catch.py``)
+CATCH_SHARE = 0.35  # of the moves in random_commands followed by a catch (about one every 8 s, as many as jabs)
 
 
 class Aim(NamedTuple):
@@ -318,7 +319,8 @@ def strike(
 def random_commands(seconds: float, seed: int = 0) -> list[Command]:
     """Moves of 1-4 s in random order, each followed by a strike and by a stop half the time; about ``seconds`` long.
 
-    Each strike goes to a random ``AIMS`` point, stepping in by a random ``STEP_RANGE`` step.
+    Each strike goes to a random ``AIMS`` point, stepping in by a random ``STEP_RANGE`` step. CATCH_SHARE of the moves
+    are also followed by a catch.
     """
     rng = np.random.default_rng(seed)
     out: list[Command] = [("stop", 1.0)]
@@ -330,6 +332,8 @@ def random_commands(seconds: float, seed: int = 0) -> list[Command]:
             (low, high), (left, right) = AIMS[STRIKES[name][0]]
             point = Aim(float(rng.uniform(low, high)), float(rng.uniform(left, right)), float(rng.uniform(*STEP_RANGE)))
             out.append((name, float(rng.uniform(0.8, 1.5)), point))
+        if rng.random() < CATCH_SHARE:
+            out.append((CATCH, float(rng.uniform(0.6, 1.2))))
         if rng.random() < 0.5:  # noqa: PLR2004
             out.append(("stop", float(rng.uniform(0.5, 2.0))))
     return out
