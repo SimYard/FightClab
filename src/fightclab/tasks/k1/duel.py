@@ -1,9 +1,9 @@
-"""A second T800 in a tracking task: it jabs at the learner at each of the learner's catches, like a makiwara.
+"""A second T800 in a tracking task: it jabs at the learner at half of the learner's catches, like a makiwara.
 
 rsl_rl trains one policy per env, so the opponent is part of the env: a zero-dim action term runs a TorchScript copy
 of a trained tracker (``tools/export_policy.py``) on the actor's observations read off the opponent, and its motion
-command plays a jab clip in front of the learner at each catch of the learner's whole library motion. Training on
-catches alone forgot the jab (docs/duel.md, "Growing the skill library"). Its observations carry no noise.
+command plays a jab clip in front of the learner at half the catches of the learner's whole library motion. Training
+on catches alone forgot the jab (docs/duel.md, "Growing the skill library"). Its observations carry no noise.
 """
 
 import copy
@@ -39,6 +39,11 @@ HEAD_CAP = 2.0  # makiwara hits a step at most, as the makiwara pays: a 535 N s 
 # jab punches through its target. At full reach a still head was touched by 31% of jabs, with 1.8 N s.
 RANGE = 0.88
 LEAD = 2 / 30  # s from the catch's start to the fist leaving the guard (the coach: the catch starts 0.05-0.08 s early)
+# The share of catches the opponent jabs at: half, as many without a hit as with one. Hit at every catch, the learner,
+# who knows the motion's phase, braced for it: from the fist's arrival its glove held 1-2 cm forward and 3 cm down of
+# the catch's place, where the fist pushes it back from, and with no jab it was off by more than the coach's 2.5 cm in
+# 96-99% of the hold (11% before). A catch with no hit makes that bracing cost.
+SHARE = 0.5
 ONSET = 0.02  # m of the fist toward the opponent: it has left the guard
 # m from the env's origin where the opponent waits between jabs: out of the learner's way (its reference's pelvis
 # spans x -3.8 to 5.4 m and y -2.6 to 5.9 m; at 4 m it walked through the opponent). Each env is its own world.
@@ -65,7 +70,7 @@ BODY = 64
 
 
 class SpawnedMotionCommand(MotionCommand):
-    """A clip on another entity, played in front of the leader's robot at each of the leader's ``cue`` skills.
+    """A clip on another entity, played in front of the leader's robot at SHARE of the leader's ``cue`` skills.
 
     The clip (guard, jab, guard) starts from its first frame so that its fist leaves the guard LEAD into the cue, RANGE
     in front of where the robot's pelvis will be at the cue (the reference's travel until then, turned by the robot's
@@ -147,7 +152,7 @@ class SpawnedMotionCommand(MotionCommand):
         self._place(env_ids, math.pi + turn, target[:, :2])
 
     def _resample_command(self, env_ids: torch.Tensor) -> None:
-        """A reset: parked until the next cue."""
+        """A reset: parked until a cue it jabs at."""
         self._park(env_ids)
 
     def _update_command(self, env_ids: torch.Tensor | None = None) -> None:
@@ -162,6 +167,7 @@ class SpawnedMotionCommand(MotionCommand):
         if len(done) > 0:
             self._park(done)
         cued = ids[~self.on[ids] & (self.cue[now] >= 0)]
+        cued = cued[torch.rand(len(cued), device=self.device) < SHARE]
         if len(cued) > 0:
             self._spawn(cued)
         self.previous[ids] = now
@@ -377,7 +383,7 @@ def shell_collisions(own: str, other: str) -> tuple[CollisionCfg, CollisionCfg]:
 
 
 def add_opponent(cfg: ManagerBasedRlEnvCfg, clip: str, policy: str, cue: str) -> None:
-    """A second ``robot``, moved by ``policy``, playing ``clip`` at each ``cue`` of the ``motion`` command.
+    """A second ``robot``, moved by ``policy``, playing ``clip`` at SHARE of the ``cue``s of the ``motion`` command.
 
     See ``SpawnedMotionCommand``. Where the opponent's tracking would end the episode, it is cut short instead: its
     fall is no failure of the learner's.
