@@ -22,9 +22,17 @@ from mjlab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg
 from mjlab.envs.mdp.actions import JointPositionActionCfg
 from mjlab.managers.action_manager import ActionTerm, ActionTermCfg
 from mjlab.managers.observation_manager import ObservationGroupCfg
+from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.sensor import ContactMatch, ContactSensorCfg
 from mjlab.tasks.tracking.mdp import MotionCommand, MotionCommandCfg
-from mjlab.utils.lab_api.math import quat_apply, quat_from_euler_xyz, quat_inv, quat_mul, yaw_quat
+from mjlab.utils.lab_api.math import (
+    quat_apply,
+    quat_apply_inverse,
+    quat_from_euler_xyz,
+    quat_inv,
+    quat_mul,
+    yaw_quat,
+)
 from mjlab.utils.spec_config import CollisionCfg
 
 from fightclab.robots.common import STIFF_COLLISION
@@ -67,6 +75,12 @@ STRIKE, TARGET = {"robot": 2, ENTITY: 8}, {"robot": 4, ENTITY: 16}
 # the learner's primitives); the makiwara, which only meets bit 1 (``makiwara.py``), doesn't meet them: the opponent
 # appears before a catch, where the makiwara still stands when a strike comes right before it.
 BODY = 64
+# What each robot sees of the other (``opponent_fists``), a term of the actors and the critic: blind, the learner
+# couldn't tell a catch with a jab coming from one without, and braced at every catch for a hit only half of them took.
+SEEN = "opponent_fists"
+FISTS = ("LINK_WRIST_END_L", "LINK_WRIST_END_R")
+SIGHT = 2.0  # m pelvis to pelvis within which the opponent is seen: past a jab's reach (0.965 m), short of PARK
+FIST_SPEED = 3.1  # m/s, the jab clip's lead fist at its fastest: the seen velocities' unit, to keep them near 1
 
 
 class SpawnedMotionCommand(MotionCommand):
@@ -76,8 +90,7 @@ class SpawnedMotionCommand(MotionCommand):
     in front of where the robot's pelvis will be at the cue (the reference's travel until then, turned by the robot's
     heading off the reference's), facing it. Started later, mid-guard, its policy jerked back and threw a malformed
     jab. It passes through the makiwara (BODY). The rest of the time, after a reset, and when the leader's motion
-    jumps, it stands in guard PARK away. Like the makiwara, the learner doesn't see it, and the learner's whole library
-    goes on around it.
+    jumps, it stands in guard PARK away. The learner sees its fists (SEEN), and its whole library goes on around it.
     """
 
     cfg: "SpawnedMotionCommandCfg"
@@ -294,11 +307,36 @@ def opponent_last_action(env: ManagerBasedRlEnv) -> torch.Tensor:
     return env.action_manager.get_term(ENTITY).raw_action
 
 
+def opponent_fists(
+    env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg | None, command_name: str = "motion"
+) -> torch.Tensor:
+    """What the ``command_name`` command's robot sees of the other one, ``asset_cfg`` (SEEN).
+
+    Whether the other is within SIGHT, then its FISTS' positions (m) and velocities (FIST_SPEED) in the frame of the
+    robot's anchor; all zeros where it isn't, or where there is none (``asset_cfg`` None).
+    """
+    if asset_cfg is None:
+        return torch.zeros(env.num_envs, 1 + 6 * len(FISTS), device=env.device)
+    motion = env.command_manager.get_term(command_name)
+    assert isinstance(motion, MotionCommand)
+    opponent = env.scene[asset_cfg.name]
+    fists = opponent.data.body_link_pos_w[:, asset_cfg.body_ids]
+    quat = motion.robot_anchor_quat_w[:, None].expand(-1, fists.shape[1], -1)
+    pos = quat_apply_inverse(quat, fists - motion.robot_anchor_pos_w[:, None])
+    vel = quat_apply_inverse(quat, opponent.data.body_link_lin_vel_w[:, asset_cfg.body_ids]) / FIST_SPEED
+    gap = torch.linalg.norm(opponent.data.root_link_pos_w[:, :2] - motion.robot.data.root_link_pos_w[:, :2], dim=-1)
+    seen = (gap < SIGHT).float()[:, None]
+    return torch.cat((seen, torch.cat((pos, vel), dim=-1).flatten(1) * seen), dim=-1)
+
+
 def opponent_observations(actor: ObservationGroupCfg) -> ObservationGroupCfg:
-    """The actor's observations read off the opponent and its command, without noise."""
+    """The actor's observations read off the opponent and its command, without noise; it sees the learner."""
     group = copy.deepcopy(actor)
     group.enable_corruption = False
     for name, term in group.terms.items():
+        if name == SEEN:
+            term.params = {"asset_cfg": SceneEntityCfg("robot", body_names=FISTS), "command_name": COMMAND}
+            continue
         if term.func.__name__ == "last_action":
             term.func, term.params = opponent_last_action, {}
             continue
@@ -411,6 +449,8 @@ def add_opponent(cfg: ManagerBasedRlEnvCfg, clip: str, policy: str, cue: str) ->
     cfg.actions[ENTITY] = OpponentActionCfg(
         entity_name=ENTITY, joints=replace(joints, entity_name=ENTITY), policy=policy
     )
+    for group in ("actor", "critic"):
+        cfg.observations[group].terms[SEEN].params["asset_cfg"] = SceneEntityCfg(ENTITY, body_names=FISTS)
     cfg.observations[ENTITY] = opponent_observations(cfg.observations["actor"])
     for name, term in list(cfg.terminations.items()):
         if term.params.get("command_name") == "motion":

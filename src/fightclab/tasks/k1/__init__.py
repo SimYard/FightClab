@@ -17,6 +17,7 @@ from pathlib import Path
 
 from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.envs.mdp.actions import JointPositionActionCfg
+from mjlab.managers.observation_manager import ObservationTermCfg
 from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.rl import RslRlOnPolicyRunnerCfg
@@ -50,7 +51,7 @@ MOTION_FOOTWORK_T800 = Path.home() / "fw_clips" / "steps_t800.npz"
 # jab:1.2@1.60,0.06 stop:0.3``, then ``motion_npz t800`` it to this path.
 MOTION_JAB_CLIP = Path.home() / "fw_clips" / "jab_clip.npz"
 # The jabber's tracker: a Fightclab-K1-Makiwara-T800 policy, exported by ``tools/export_policy.py`` (policies aren't
-# in the repo).
+# in the repo). One from before the tasks saw an opponent (mkc2) is widened by ``tools/expand_inputs.py`` first.
 OPPONENT_T800 = Path.home() / "fw_clips" / "opponent_t800.pt"
 # Per makiwara.IMPULSE_SCALE of a hit, landed on the makiwara or taken on the head: one 15 N s hit is worth a third of
 # a second of the fists' tracking.
@@ -166,6 +167,13 @@ def t800_k1_footwork_tracking_env_cfg(play: bool = False) -> ManagerBasedRlEnvCf
     # feet for more than 0.3, and its centre of mass stayed 2 cm behind the jab and 5 cm behind the step jab, as far as
     # 0.3 allows (the RL review); the generator keeps every move within 0.5.
     cfg.events["foot_friction"].params["ranges"] = (0.5, 1.2)
+    # What the learner sees of an opponent: none here (``duel.opponent_fists``); ``duel.add_opponent`` points it at one.
+    # ponytail: a run from scratch with no opponent sees these zeros only, its normalizer's std goes to 0 and the first
+    # opponent's fists come in 100x; every run starts from a trained tracker (see the runner's entropy).
+    for group in ("actor", "critic"):
+        cfg.observations[group].terms[duel.SEEN] = ObservationTermCfg(
+            func=duel.opponent_fists, params={"asset_cfg": None}
+        )
     return cfg
 
 
