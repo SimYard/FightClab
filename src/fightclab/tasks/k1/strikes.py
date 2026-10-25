@@ -29,6 +29,7 @@ from fightclab.motion import ROBOTS, model, set_pose
 H = 1.75  # m, T800
 CLIP = Path(__file__).with_name("jab_t800.csv")
 LEAD_ARM = ("J13_SHOULDER_PITCH_L", "J14_SHOULDER_ROLL_L", "J15_SHOULDER_YAW_L", "J16_ELBOW_PITCH_L", "J17_ELBOW_YAW_L")
+REAR_ARM = ("J18_SHOULDER_PITCH_R", "J19_SHOULDER_ROLL_R", "J20_SHOULDER_YAW_R", "J21_ELBOW_PITCH_R", "J22_ELBOW_YAW_R")
 TORSO = "J12_TORSO_YAW"
 SPEED = (
     0.75  # times the clip's timing: 0.23 s out (the coach: 0.25 or less), the elbow opening at ~19 rad/s (its M107-15
@@ -147,17 +148,18 @@ def body_ramp(
     onset, peak = int(np.argmax(extension > 0.05)) + late, int(np.argmax(extension)) + late  # noqa: PLR2004
     top += peak
     frames = np.arange(len(extension))
-    up = np.clip((frames - (onset - lead)) / (top - onset + lead), 0.0, 1.0)
-    down = np.clip((frames - top - hold) / back, 0.0, 1.0)
-
-    def jerk(s: NDArray[np.float64]) -> NDArray[np.float64]:
-        return 10 * s**3 - 15 * s**4 + 6 * s**5
-
+    up, down = (frames - (onset - lead)) / (top - onset + lead), (frames - top - hold) / back
     return np.where(frames <= top, jerk(up), 1.0 - jerk(down))
 
 
+def jerk(s: NDArray[np.float64]) -> NDArray[np.float64]:
+    """Minimum jerk from 0 to 1 as ``s`` goes from 0 to 1, flat outside."""
+    s = np.clip(s, 0.0, 1.0)
+    return 10 * s**3 - 15 * s**4 + 6 * s**5
+
+
 class Arm(NamedTuple):
-    """The lead arm for inverse kinematics."""
+    """An arm for inverse kinematics."""
 
     body: int
     """the wrist end."""
@@ -170,15 +172,15 @@ class Arm(NamedTuple):
     """the palm's normal in the wrist end's frame (it faces the thigh with all joints at zero)."""
 
 
-def arm_chain(m: mujoco.MjModel) -> Arm:
-    """The lead arm of ``m``."""
-    joints = [m.joint(n).id for n in LEAD_ARM]
-    body = m.body("LINK_WRIST_END_L").id
+def arm_chain(m: mujoco.MjModel, side: str = "L") -> Arm:
+    """The lead (``L``) or rear (``R``) arm of ``m``."""
+    joints = [m.joint(n).id for n in (LEAD_ARM if side == "L" else REAR_ARM)]
+    body = m.body(f"LINK_WRIST_END_{side}").id
     d = mujoco.MjData(m)
     d.qpos[3] = 1.0
     mujoco.mj_kinematics(m, d)
     lo, hi = m.jnt_range[joints].T.copy()
-    hi[LEAD_ARM.index("J16_ELBOW_PITCH_L")] = ELBOW_MAX
+    hi[3] = ELBOW_MAX  # the elbow's pitch, fourth in either arm
     palm = d.xmat[body].reshape(3, 3).T @ np.array((0.0, -1.0, 0.0))
     return Arm(body, m.jnt_qposadr[joints], m.jnt_dofadr[joints], lo, hi, palm)
 
