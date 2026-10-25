@@ -2,8 +2,9 @@
 
     uv run python tools/skill_gate.py CHECKPOINT OUT.json [BASELINE.json]
 
-Rolls the policy out in Fightclab-K1-Makiwara-T800's training env (pushes off, deterministic actions; ENVS envs for
-SECONDS) and measures each skill of the motion by its labels:
+Rolls the policy out in Fightclab-K1-Makiwara-T800's training env (pushes off, deterministic actions, seed SEED;
+ENVS envs for SECONDS) and measures each skill of the motion by its labels, counting only skills whose motion frames
+follow one another from the frame before to the frame after (no reset or wrap of the motion cut them):
 - strikes (jab, jab_body, step_jab): the share of strikes touching the pad, the first 40 ms of impulse (N s, median),
   the share pushing longer than 80 ms, the recoil tail (pelvis more than 1.75 cm behind its pre-strike spot within
   0.5 s of the touch), the fist's height error at the touch (cm, p90 of its size);
@@ -11,8 +12,10 @@ SECONDS) and measures each skill of the motion by its labels:
   torso (the tracked bodies don't include the head) and the elbow-pitch link (the tracked elbow);
 - footwork moves: the pelvis travel's error against the reference's over a move (cm, median), and the feet-slip cost;
 - every skill: the mean body position error (cm); overall falls per minute.
-With BASELINE.json, prints each metric against it with TOLERANCE and exits 1 if any fails. A fine-tune that loses a
-skill without falling (duel2: the jab's 40 ms impulse 20 -> 10 N s) shows in no training curve, only here.
+Each record pairs the robot with the reference frame it was just tracking. A skill missing from the rollout, or never
+touching the pad, gets NaN, which fails. With BASELINE.json, prints each metric against it with TOLERANCE and exits 1
+if any fails. A fine-tune that loses a skill without falling (duel2: the jab's 40 ms impulse 20 -> 10 N s) shows in
+no training curve, only here.
 """
 
 import json
@@ -35,11 +38,13 @@ from fightclab.tasks.k1.strikes import STRIKES
 
 TASK = "Fightclab-K1-Makiwara-T800"
 ENVS, SECONDS = 512, 15.0  # about 800 strikes and 500 catches
+SEED = 0  # one set of starts and noises for every checkpoint: the comparison is paired
 TOUCH = 1e-4  # N s of push in a step that counts as touching the pad
 PUSH, RECOIL, RECOIL_WINDOW = 0.08, 0.0175, 0.5  # s, m, s
 COVER, DEPTH, ON_TIME, ELBOW = 0.025, (-0.03, 0.04), 0.15, 0.03  # the coach's catch checks (m, m, s, m)
 LEAD, PITCH, YAW, HOME, HOME_AFTER = 0.025, 5.0, 4.0, 0.04, 0.15  # (m, deg, deg, m, s)
 # Per metric: which way is worse, how much worse than the baseline passes, and whether that is a fraction of it.
+# Two seeds of one checkpoint differed by 0.03 in rates, 0.8 N s in impulse and 1-5 falls in 128 env-minutes.
 TOLERANCE: dict[str, tuple[str, float, bool]] = {
     "touch": ("lower", 0.05, False),
     "j40": ("lower", 0.15, True),
@@ -53,15 +58,16 @@ TOLERANCE: dict[str, tuple[str, float, bool]] = {
     "still": ("lower", 0.05, False),
     "travel_cm": ("higher", 1.0, False),
     "slip": ("higher", 0.2, True),
-    "falls_per_min": ("higher", 0.5, False),
+    "falls_per_min": ("higher", 0.05, False),
 }
 MOVES = tuple(k for k, v in COMMANDS.items() if v is not None)
 
 
 def rollout(checkpoint: str) -> tuple[dict[str, np.ndarray], list[str], float]:
-    """Per step and env: what the checks need; the motion's labels; the policy step."""
+    """Per step and env: what the checks need, at the reference frame just tracked; the labels; the policy step."""
     cfg = load_env_cfg(TASK)
     cfg.scene.num_envs = ENVS
+    cfg.seed = SEED
     cfg.events.pop("push_robot")
     env = ManagerBasedRlEnv(cfg=cfg, device="cuda:0")
     venv = RslRlVecEnvWrapper(env)
@@ -83,102 +89,101 @@ def rollout(checkpoint: str) -> tuple[dict[str, np.ndarray], list[str], float]:
         )
     }
     slip = env.reward_manager.active_terms.index("feet_slip")
-    keys = (
-        "t",
-        "done",
-        "fell",
-        "strike",
-        "push",
-        "toward",
-        "body_err",
-        "slip",
-        "quat",
-        "ref_quat",
-        *body,
-        *(f"ref_{k}" for k in body),
-    )
+    keys = ("t", "fell", "strike", "push", "toward", "body_err", "slip", "quat", *body, *(f"ref_{k}" for k in body))
     rec: dict[str, list[torch.Tensor]] = {k: [] for k in keys}
     obs = venv.get_observations()
     for _ in range(round(SECONDS / env.step_dt)):
         with torch.no_grad():
-            obs, _, dones, _ = venv.step(policy(obs))
+            obs, *_ = venv.step(policy(obs))
+        # The step's rewards and metrics came before the command moved on a frame: that frame is the one tracked.
+        t = (motion.time_steps - 1).clamp(min=0)
         force = env.scene[makiwara.SENSOR].data.force_history[:, 0]
-        rec["t"].append(motion.time_steps.clone())
-        rec["done"].append(dones.bool())
+        rec["t"].append(t)
         rec["fell"].append(env.termination_manager.terminated.clone())
-        rec["strike"].append(pad.strike[motion.time_steps].clone())
+        rec["strike"].append(pad.strike[t])
         rec["push"].append((force * pad.toward[:, None]).sum(-1).abs().sum(-1) * makiwara.PHYSICS_DT)
         rec["toward"].append(pad.toward.clone())
-        rec["body_err"].append((motion.body_pos_relative_w - motion.robot_body_pos_w).norm(dim=-1).mean(-1))
+        rec["body_err"].append(motion.metrics["error_body_pos"].clone())
         rec["slip"].append(-env.reward_manager._step_reward[:, slip])
         rec["quat"].append(motion.robot_body_quat_w[:, body["torso"]].clone())
-        rec["ref_quat"].append(motion.body_quat_w[:, body["torso"]].clone())
         for k, i in body.items():
             rec[k].append(motion.robot_body_pos_w[:, i].clone())
-            rec[f"ref_{k}"].append(motion.body_pos_w[:, i].clone())
+            rec[f"ref_{k}"].append(motion.motion.body_pos_w[t, i])  # no env origin: only differences and heights
     labels = Path(motion.cfg.motion_file).with_suffix(".labels.txt").read_text().split()
     return {k: torch.stack(v).cpu().numpy() for k, v in rec.items()}, labels, env.step_dt
 
 
-def runs(mask: np.ndarray, done: np.ndarray) -> list[tuple[int, int, int]]:
-    """(env, first step, step after) of each run of ``mask`` wholly inside the rollout and one episode."""
+def runs(mask: np.ndarray, follows: np.ndarray) -> list[tuple[int, int, int]]:
+    """(env, first record, record after) of each run of ``mask`` that no reset or wrap of the motion cut.
+
+    ``follows``: each record's frame is the one after the previous record's; it must hold from the record before the
+    run to the record after it.
+    """
     out = []
     steps, envs = mask.shape
     for e in range(envs):
-        t = 1
-        while t < steps:
-            if mask[t, e] and not mask[t - 1, e] and not done[t - 1, e]:
-                end = t
-                while end < steps and mask[end, e] and not done[end - 1, e]:
-                    end += 1
-                if end < steps and not mask[end, e]:
-                    out.append((e, t, end))
-                t = end
-            t += 1
+        start = None
+        for k in range(1, steps):
+            if not follows[k, e]:
+                start = None
+            elif mask[k, e] and not mask[k - 1, e]:
+                start = k
+            elif not mask[k, e] and mask[k - 1, e] and start is not None:
+                out.append((e, start, k))
+                start = None
     return out
 
 
-def measure(rec: dict[str, np.ndarray], labels: list[str], dt: float) -> dict[str, dict[str, float]]:
-    """Each skill's metrics (see the module's docstring)."""
-    label = np.array(labels)[np.minimum(np.round(rec["t"] * dt * 30).astype(int), len(labels) - 1)]
-    done = rec["done"]
-    out: dict[str, dict[str, float]] = {}
-    for name in STRIKES:
-        rows = []
-        for e, t0, t1 in runs((label == name) & (rec["strike"] >= 0), done):
-            hit = np.nonzero(rec["push"][t0:t1, e] > TOUCH)[0]
-            if not len(hit):
-                rows.append((0.0, np.nan, np.nan, np.nan, np.nan))
-                continue
-            th = t0 + int(hit[0])
-            n = int(np.argmax(rec["push"][th : t1 + 1, e] <= TOUCH))
-            u = rec["toward"][min(t0 + 3, t1 - 1), e]
-            window = slice(th, min(th + round(RECOIL_WINDOW / dt), t1))
-            behind = -min(0.0, float(((rec["pelvis"][window, e] - rec["pelvis"][t0, e]) @ u).min()))
-            height = rec["fist"][th, e, 2] - rec["ref_fist"][th, e, 2]
-            rows.append((1.0, rec["push"][th : th + 2, e].sum(), float(n * dt > PUSH), float(behind > RECOIL), height))
-        a = np.array(rows, dtype=float)
-        touched = a[a[:, 0] > 0]
-        out[name] = {
-            "n": len(a),
-            "touch": a[:, 0].mean(),
-            "j40": np.median(touched[:, 1]),
-            "push": touched[:, 2].mean(),
-            "recoil": touched[:, 3].mean(),
-            "height_p90_cm": 100 * np.percentile(np.abs(touched[:, 4]), 90),
-        }
+def mean(x: np.ndarray) -> float:
+    """The mean, NaN if empty."""
+    return float(np.mean(x)) if len(x) else float("nan")
+
+
+def strike_metrics(rec: dict[str, np.ndarray], spans: list[tuple[int, int, int]], dt: float) -> dict[str, float]:
+    """A strike's metrics over its runs ``spans``."""
+    rows = []
+    for e, t0, t1 in spans:
+        hit = np.nonzero(rec["push"][t0:t1, e] > TOUCH)[0]
+        if not len(hit):
+            rows.append((0.0, np.nan, np.nan, np.nan, np.nan))
+            continue
+        th = t0 + int(hit[0])
+        off = rec["push"][th:t1, e] <= TOUCH
+        n = int(np.argmax(off)) if off.any() else len(off)  # still touching at the strike's end: all of it
+        u = rec["toward"][min(t0 + 3, t1 - 1), e]
+        window = slice(th, min(th + round(RECOIL_WINDOW / dt), t1))
+        behind = -min(0.0, float(((rec["pelvis"][window, e] - rec["pelvis"][t0, e]) @ u).min()))
+        height = rec["fist"][th, e, 2] - rec["ref_fist"][th, e, 2]
+        rows.append((1.0, rec["push"][th : th + 2, e].sum(), float(n * dt > PUSH), float(behind > RECOIL), height))
+    a = np.array(rows, dtype=float).reshape(-1, 5)
+    hits = a[a[:, 0] > 0]
+    return {
+        "n": len(a),
+        "touch": mean(a[:, 0]),
+        "j40": float(np.median(hits[:, 1])) if len(hits) else float("nan"),
+        "push": mean(hits[:, 2]),
+        "recoil": mean(hits[:, 3]),
+        "height_p90_cm": 100 * float(np.percentile(np.abs(hits[:, 4]), 90)) if len(hits) else float("nan"),
+    }
+
+
+def catch_metrics(
+    rec: dict[str, np.ndarray], spans: list[tuple[int, int, int]], follows: np.ndarray, dt: float
+) -> dict[str, float]:
+    """The coach's catch checks, each as the share of the catches ``spans`` passing."""
     x = np.array((np.cos(OPPONENT_YAW), np.sin(OPPONENT_YAW), 0.0))
     frame = np.stack((x, np.cross((0.0, 0.0, 1.0), x), (0.0, 0.0, 1.0)), axis=1)
     step = 1 / 30 / dt  # policy steps per motion frame
     hold = (round(catch.OUT * step), round((catch.OUT + catch.HOLD) * step) + 1)
     after = round(catch.FRAMES * step) + round(HOME_AFTER / dt)
     checks = []
-    for e, s, _end in runs(label == CATCH, done):
-        if s + after >= len(done) or done[s : s + after, e].any():
+    for e, s, _end in spans:
+        if s + after >= len(follows) or not follows[s + 1 : s + after + 1, e].all():
             continue
         rel = {k: rec[k][:, e] - rec["torso"][:, e] for k in ("glove", "elbow", "fist")}
         ref = {k: rec[f"ref_{k}"][:, e] - rec["ref_torso"][:, e] for k in ("glove", "elbow")}
-        off = (rel["glove"] - ref["glove"][s + hold[0] : s + hold[1]].mean(0)) @ frame
+        held = slice(s + hold[0], s + hold[1])
+        off = (rel["glove"] - ref["glove"][held].mean(0)) @ frame
         inside = (np.hypot(off[:, 1], off[:, 2]) <= COVER) & (off[:, 0] >= DEPTH[0]) & (off[:, 0] <= DEPTH[1])
         arrive = np.nonzero(inside[s : s + hold[1]])[0]
         span = slice(s, s + round(catch.FRAMES * step) + 1)
@@ -189,36 +194,38 @@ def measure(rec: dict[str, np.ndarray], labels: list[str], dt: float) -> dict[st
             and np.abs(yaw - yaw[0]).max() <= YAW
             and np.linalg.norm(rel["glove"][s + after] - rel["glove"][s - 1]) <= HOME
         )
-        elbow = np.linalg.norm(
-            rel["elbow"][s + hold[0] : s + hold[1]] - ref["elbow"][s + hold[0] : s + hold[1]], axis=1
-        )
-        checks.append(
-            (
-                inside[s + hold[0] : s + hold[1]].all(),
-                len(arrive) > 0 and arrive[0] * dt <= ON_TIME,
-                (elbow <= ELBOW).all(),
-                still,
-            )
-        )
-    c = np.array(checks, dtype=float)
-    out[CATCH] = {"n": len(c), **dict(zip(("cover", "on_time", "elbow", "still"), c.mean(0), strict=True))}
+        elbow = np.linalg.norm(rel["elbow"][held] - ref["elbow"][held], axis=1)
+        arrived = len(arrive) > 0 and arrive[0] * dt <= ON_TIME
+        checks.append((inside[held].all(), arrived, (elbow <= ELBOW).all(), still))
+    c = np.array(checks, dtype=float).reshape(-1, 4)
+    return {"n": len(c), **{k: mean(c[:, i]) for i, k in enumerate(("cover", "on_time", "elbow", "still"))}}
+
+
+def measure(rec: dict[str, np.ndarray], labels: list[str], dt: float) -> dict[str, dict[str, float]]:
+    """Each skill's metrics (see the module's docstring)."""
+    label = np.array(labels)[np.minimum(np.round(rec["t"] * dt * 30).astype(int), len(labels) - 1)]
+    follows = np.zeros(rec["t"].shape, dtype=bool)
+    follows[1:] = rec["t"][1:] == rec["t"][:-1] + 1
+    out = {name: strike_metrics(rec, runs((label == name) & (rec["strike"] >= 0), follows), dt) for name in STRIKES}
+    out[CATCH] = catch_metrics(rec, runs(label == CATCH, follows), follows, dt)
     travel, slip = [], []
-    for e, t0, t1 in runs(np.isin(label, MOVES), done):
+    for e, t0, t1 in runs(np.isin(label, MOVES), follows):
         moved = rec["pelvis"][t1 - 1, e, :2] - rec["pelvis"][t0, e, :2]
         ref_moved = rec["ref_pelvis"][t1 - 1, e, :2] - rec["ref_pelvis"][t0, e, :2]
         travel.append(np.linalg.norm(moved - ref_moved))
         slip.append(rec["slip"][t0:t1, e].mean())
-    out["footwork"] = {"n": len(travel), "travel_cm": 100 * np.median(travel), "slip": float(np.mean(slip))}
+    median = float(np.median(travel)) if travel else float("nan")
+    out["footwork"] = {"n": len(travel), "travel_cm": 100 * median, "slip": mean(np.array(slip))}
     for name in (*STRIKES, CATCH):
-        out[name]["body_cm"] = 100 * rec["body_err"][label == name].mean()
-    out["footwork"]["body_cm"] = 100 * rec["body_err"][np.isin(label, MOVES)].mean()
-    falls = rec["fell"].sum()
-    out["all"] = {"falls_per_min": falls / (done.shape[1] * done.shape[0] * dt / 60)}
+        out[name]["body_cm"] = 100 * mean(rec["body_err"][label == name])
+    out["footwork"]["body_cm"] = 100 * mean(rec["body_err"][np.isin(label, MOVES)])
+    minutes = rec["t"].size * dt / 60
+    out["all"] = {"falls_per_min": float(rec["fell"].sum()) / minutes}
     return {skill: {k: float(v) for k, v in m.items()} for skill, m in out.items()}
 
 
 def compare(result: dict[str, dict[str, float]], baseline: dict[str, dict[str, float]]) -> bool:
-    """Prints each metric against the baseline's; whether all pass."""
+    """Prints each metric against the baseline's; whether all pass (NaN on either side fails)."""
     ok = True
     for skill, metrics in result.items():
         for k, v in metrics.items():

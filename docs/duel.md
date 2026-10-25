@@ -210,9 +210,10 @@ BeyondMimic 2025, PHC 2023):
    reference, while the head was hit as often as before. The old skills' data costs nothing to regenerate, so
    training on all of it is the upper bound; freezing tricks (EWC, adapters, progressive nets) are for data that's
    gone.
-2. **Shares, not equal time** (`steps.SKILL_SHARES`): a new skill gets about 35% of the motion's skill slots,
-   footwork stays at 15% of the time or more, every old skill keeps 0.5% or more, and a skill that regressed gets
-   more. A fine-tune then costs about the same 1000-1500 iterations whatever the library's size.
+2. **Shares, not equal time** (`steps.SLOTS`: after each move a strike slot and a defence slot, each with its
+   chance and its skills' shares): a new skill gets about 35% of its slot, footwork stays at 15% of the time or
+   more, every old skill keeps 0.5% or more, and a skill that regressed gets more. A fine-tune then costs about the
+   same 1000-1500 iterations whatever the library's size.
 3. **The gate** (`tools/skill_gate.py`): after a fine-tune, each skill against the accepted checkpoint's numbers
    (strikes' touch rate, 40 ms impulse, pushes, recoil tail, aim; the catch's checks; footwork's travel and slip;
    falls). A fine-tune is accepted only if every skill passes. No training curve shows a skill getting weaker

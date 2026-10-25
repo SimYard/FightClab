@@ -174,10 +174,11 @@ def t800_k1_makiwara_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
 
 
 def t800_k1_footwork_tracking_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
-    """The kick's PPO, logged as K-1 footwork tracking, for fine-tunes of a converged tracker.
+    """The kick's PPO, logged as K-1 footwork tracking.
 
-    Less entropy than mjlab's 0.005: duel2, a fine-tune whose task gave next to no signal, raised the policy's noise
-    19% in 1000 iterations and the catch drifted off its reference.
+    Every run of these tasks now starts from a trained tracker, so less entropy than mjlab's 0.005: duel2, a
+    fine-tune whose task gave next to no signal, raised the policy's noise 19% in 1000 iterations and the catch drifted
+    off its reference. From scratch, set it back.
     """
     cfg = ppo_runner_cfg("t800")
     cfg.experiment_name = "t800_k1_footwork_tracking"

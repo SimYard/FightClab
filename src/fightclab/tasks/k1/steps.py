@@ -78,13 +78,13 @@ PELVIS_DROP = 0.04
 # Unit moves in the opponent's frame (forward, left) and which foot steps first (0 left/lead, 1 right/rear).
 COMMANDS = {"forward": ((1, 0), 0), "back": ((-1, 0), 1), "left": ((0, 1), 0), "right": ((0, -1), 1), "stop": None}
 CATCH = "catch"  # the rear-hand catch of a head jab (``catch.py``)
-# The skills of random_commands and their shares of its skill slots: every skill learned so far, always (a fine-tune
-# on some of them forgot the rest), a new one given about 35% and every old one 0.5% or more (docs/duel.md, "Growing
-# the skill library"). The approach jab came first (Varga steps in with it at 5:31.8 of "Combining Footwork &
-# Punches"); trained alone, its step leaked into the standing jab (a shuffle forward). These shares and SKILL_SLOT give
-# the counts mkc2 was trained on: a strike after half the moves, a catch after 35%.
-SKILL_SHARES = {"step_jab": 0.2, "jab": 0.2, "jab_body": 0.2, CATCH: 0.4}
-SKILL_SLOT = 0.85  # of the moves followed by a skill
+# The skills of random_commands, every one learned so far, always (a fine-tune on some of them forgot the rest;
+# docs/duel.md, "Growing the skill library"): after each move a strike slot, then a defence slot, each filled with its
+# chance, by its skills' shares. A new skill gets about 35% of its slot and every old one 0.5% or more. The approach
+# jab came first (Varga steps in with it at 5:31.8 of "Combining Footwork & Punches"); trained alone, its step leaked
+# into the standing jab (a shuffle forward). Today's: mkc2's mix, a strike after half the moves and a catch after 35%,
+# half of those straight out of a strike.
+SLOTS = (({"step_jab": 1.0, "jab": 1.0, "jab_body": 1.0}, 0.5), ({CATCH: 1.0}, 0.35))
 
 
 class Aim(NamedTuple):
@@ -322,17 +322,19 @@ def strike(
 def random_commands(seconds: float, seed: int = 0) -> list[Command]:
     """Moves of 1-4 s in random order with skills and stops between them; about ``seconds`` long.
 
-    SKILL_SLOT of the moves are followed by a skill drawn by SKILL_SHARES, half by a stop. Each strike goes to a random
-    ``AIMS`` point, stepping in by a random ``STEP_RANGE`` step.
+    After each move, SLOTS' skills, then a stop half the time. Each strike goes to a random ``AIMS`` point, stepping in
+    by a random ``STEP_RANGE`` step.
     """
-    skills, weights = list(SKILL_SHARES), np.array(list(SKILL_SHARES.values()))
     rng = np.random.default_rng(seed)
     out: list[Command] = [("stop", 1.0)]
     moves = [c for c in COMMANDS if c != "stop"]
     while sum(c[1] for c in out) < seconds:
         out.append((str(rng.choice(moves)), float(rng.uniform(1.0, 4.0))))
-        if rng.random() < SKILL_SLOT:
-            name = str(rng.choice(skills, p=weights / weights.sum()))
+        for shares, chance in SLOTS:
+            if rng.random() >= chance:
+                continue
+            weights = np.array(list(shares.values()))
+            name = str(rng.choice(list(shares), p=weights / weights.sum()))
             if name == CATCH:
                 out.append((CATCH, float(rng.uniform(0.6, 1.2))))
             else:
