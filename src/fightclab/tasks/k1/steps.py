@@ -325,9 +325,6 @@ def random_commands(seconds: float, seed: int = 0) -> list[Command]:
     SKILL_SLOT of the moves are followed by a skill drawn by SKILL_SHARES, half by a stop. Each strike goes to a random
     ``AIMS`` point, stepping in by a random ``STEP_RANGE`` step.
     """
-    unknown = set(SKILL_SHARES) - {*STRIKES, CATCH}
-    if unknown:
-        raise ValueError(f"no such skills: {sorted(unknown)}")
     skills, weights = list(SKILL_SHARES), np.array(list(SKILL_SHARES.values()))
     rng = np.random.default_rng(seed)
     out: list[Command] = [("stop", 1.0)]

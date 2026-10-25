@@ -26,6 +26,7 @@ from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.tracking.mdp import MotionCommand
+from scipy.spatial.transform import Rotation
 
 from fightclab.tasks.k1 import catch, makiwara
 from fightclab.tasks.k1.footwork import OPPONENT_YAW
@@ -137,14 +138,6 @@ def runs(mask: np.ndarray, done: np.ndarray) -> list[tuple[int, int, int]]:
     return out
 
 
-def euler_zy(q: np.ndarray) -> tuple[float, float]:
-    """A quaternion's (w, x, y, z) yaw and pitch, deg."""
-    w, x, y, z = q
-    return np.degrees(np.arctan2(2 * (x * y + w * z), 1 - 2 * (y * y + z * z))), np.degrees(
-        np.arcsin(2 * (w * y - x * z))
-    )
-
-
 def measure(rec: dict[str, np.ndarray], labels: list[str], dt: float) -> dict[str, dict[str, float]]:
     """Each skill's metrics (see the module's docstring)."""
     label = np.array(labels)[np.minimum(np.round(rec["t"] * dt * 30).astype(int), len(labels) - 1)]
@@ -189,7 +182,7 @@ def measure(rec: dict[str, np.ndarray], labels: list[str], dt: float) -> dict[st
         inside = (np.hypot(off[:, 1], off[:, 2]) <= COVER) & (off[:, 0] >= DEPTH[0]) & (off[:, 0] <= DEPTH[1])
         arrive = np.nonzero(inside[s : s + hold[1]])[0]
         span = slice(s, s + round(catch.FRAMES * step) + 1)
-        yaw, pitch = np.array([euler_zy(q) for q in rec["quat"][span, e]]).T
+        yaw, pitch, _ = Rotation.from_quat(rec["quat"][span, e][:, [1, 2, 3, 0]]).as_euler("ZYX", degrees=True).T
         still = (
             np.linalg.norm(rel["fist"][span] - rel["fist"][s - 1], axis=1).max() <= LEAD
             and np.abs(pitch - pitch[0]).max() <= PITCH
