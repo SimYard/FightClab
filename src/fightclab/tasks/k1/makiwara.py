@@ -21,6 +21,7 @@ from mjlab.entity import EntityCfg
 from mjlab.sensor import ContactMatch, ContactSensorCfg
 from mjlab.tasks.tracking.mdp import MotionCommand
 from mjlab.utils.lab_api.math import quat_apply, quat_inv, quat_mul, yaw_quat
+from mjlab.utils.spec_config import CollisionCfg
 
 from fightclab.tasks.k1.strikes import STRIKES, H
 
@@ -81,8 +82,13 @@ def makiwara_spec() -> mujoco.MjSpec:
 
 
 def makiwara_entity() -> EntityCfg:
-    """The makiwara, a mocap prop placed by ``Makiwara`` every step."""
-    return EntityCfg(spec_fn=makiwara_spec, init_state=EntityCfg.InitialStateCfg(pos=PARK))
+    """The makiwara, a mocap prop placed by ``Makiwara`` every step.
+
+    It meets what has bit 1 in its contype (the floor, the learner's primitives), not what only meets bit 1: the
+    duel's opponent passes through it (``duel.BODY``).
+    """
+    collision = CollisionCfg(geom_names_expr=(".*",), contype=0, conaffinity=1, condim=3, priority=0)
+    return EntityCfg(spec_fn=makiwara_spec, init_state=EntityCfg.InitialStateCfg(pos=PARK), collisions=(collision,))
 
 
 def makiwara_hits() -> ContactSensorCfg:

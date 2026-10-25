@@ -58,14 +58,19 @@ SHELL_GROUP = 3  # not drawn
 # contype bits of each robot's strikers and targets. A striker meets the other robot's strikers and targets, a
 # target only its strikers: no head on head, no robot on itself or the floor (those are the vendor's primitives).
 STRIKE, TARGET = {"robot": 2, ENTITY: 8}, {"robot": 4, ENTITY: 16}
+# contype bit of the opponent's own (the vendor's) primitives. They meet it (self-collisions) and bit 1 (the floor,
+# the learner's primitives); the makiwara, which only meets bit 1 (``makiwara.py``), doesn't meet them: the opponent
+# appears before a catch, where the makiwara still stands when a strike comes right before it.
+BODY = 64
 
 
 class SpawnedMotionCommand(MotionCommand):
     """A clip on another entity, played in front of the leader's robot at each of the leader's ``cue`` skills.
 
-    At the cue's start the clip (guard, jab, guard) appears RANGE in front of the robot's pelvis, facing it along the
-    robot's heading, at the frame its fist leaves the guard LEAD later. Not sooner: a cue right after a strike still
-    has the makiwara standing there until it starts. The rest of the time, after a reset, and when the leader's motion
+    The clip (guard, jab, guard) starts from its first frame so that its fist leaves the guard LEAD into the cue, RANGE
+    in front of where the robot's pelvis will be at the cue (the reference's travel until then, turned by the robot's
+    heading off the reference's), facing it. Started later, mid-guard, its policy jerked back and threw a malformed
+    jab. It passes through the makiwara (BODY). The rest of the time, after a reset, and when the leader's motion
     jumps, it stands in guard PARK away. Like the makiwara, the learner doesn't see it, and the learner's whole library
     goes on around it.
     """
@@ -74,7 +79,7 @@ class SpawnedMotionCommand(MotionCommand):
     _pending_forward: bool
 
     def __init__(self, cfg: "SpawnedMotionCommandCfg", env: ManagerBasedRlEnv) -> None:
-        """Parked; the clip's frame to start at (its fist ONSET toward the opponent, less LEAD) and first pelvis."""
+        """Parked; the clip's onset (its fist ONSET toward the opponent) and first pelvis."""
         super().__init__(cfg, env)
         n = self.num_envs
         self.on = torch.zeros(n, dtype=torch.bool, device=self.device)
@@ -83,9 +88,8 @@ class SpawnedMotionCommand(MotionCommand):
         self.origin = self.motion.body_pos_w[0, 0].clone()  # the clip's first pelvis, the placement's pivot
         fist = self.motion.body_pos_w[:, self.cfg.body_names.index(makiwara.FIST)]
         reach = (fist - fist[0]) @ self.toward(torch.zeros(1, device=self.device))[0]
-        self.first = int(torch.argmax((reach > ONSET).int())) - round(LEAD / env.step_dt)
-        assert self.first >= 0, "the clip must start in guard LEAD before its fist moves"
-        self.cue: torch.Tensor | None = None  # per leader step: whether a cue starts there
+        self.onset = int(torch.argmax((reach > ONSET).int()))
+        self.cue: torch.Tensor | None = None  # per leader step: the step of the cue its clip starts for, or -1
         self.previous = torch.zeros(n, dtype=torch.long, device=self.device)  # the leader's step at the last update
 
     @property
@@ -101,19 +105,21 @@ class SpawnedMotionCommand(MotionCommand):
         return torch.stack((torch.cos(yaw), torch.sin(yaw), torch.zeros_like(yaw)), dim=-1)
 
     def _cues(self) -> torch.Tensor:
-        """Per leader step, whether a cue starts there: from the leader's motion's labels."""
+        """Per leader step, the cue step whose clip starts there (or -1): from the leader's motion's labels."""
         leader = self.leader
         labels = Path(leader.cfg.motion_file).with_suffix(".labels.txt").read_text().split()
         total = leader.motion.time_step_total
         names = [labels[min(round(t * self._env.step_dt * 30), len(labels) - 1)] for t in range(total)]
-        starts = [t for t in range(1, total) if names[t] == self.cfg.cue and names[t - 1] != self.cfg.cue]
-        cue = torch.zeros(total, dtype=torch.bool, device=self.device)
-        cue[starts] = True
+        cue = torch.full((total,), -1, dtype=torch.long, device=self.device)
+        for t in range(1, total):
+            start = t + round(LEAD / self._env.step_dt) - self.onset
+            if names[t] == self.cfg.cue and names[t - 1] != self.cfg.cue and start >= 0:
+                cue[start] = t
         return cue
 
-    def _place(self, env_ids: torch.Tensor, yaw: torch.Tensor, xy: torch.Tensor, frame: int) -> None:
-        """The clip's ``frame`` with its first pelvis at ``xy``, turned by ``yaw``, written into the sim."""
-        self.time_steps[env_ids] = frame
+    def _place(self, env_ids: torch.Tensor, yaw: torch.Tensor, xy: torch.Tensor) -> None:
+        """The clip's first frame at ``xy`` turned by ``yaw``, written into the sim."""
+        self.time_steps[env_ids] = 0
         self.turn[env_ids] = quat_from_euler_xyz(torch.zeros_like(yaw), torch.zeros_like(yaw), yaw)
         self.offset[env_ids] = torch.cat((xy, self.origin[2].expand(len(env_ids), 1)), dim=-1)
         pos, quat = self.body_pos_w[env_ids, 0], self.body_quat_w[env_ids, 0]
@@ -127,15 +133,18 @@ class SpawnedMotionCommand(MotionCommand):
         self.on[env_ids] = False
         origins = self._env.scene.env_origins[env_ids, :2]
         park = origins + torch.tensor(PARK, device=self.device)
-        self._place(env_ids, torch.zeros(len(env_ids), device=self.device), park, 0)
+        self._place(env_ids, torch.zeros(len(env_ids), device=self.device), park)
 
     def _spawn(self, env_ids: torch.Tensor) -> None:
-        leader = self.leader
+        leader, cue = self.leader, self.cue
+        assert cue is not None
+        now, then = leader.time_steps[env_ids], cue[leader.time_steps[env_ids]]
         heading = yaw_quat(quat_mul(leader.robot_anchor_quat_w[env_ids], quat_inv(leader.anchor_quat_w[env_ids])))
         turn = 2 * torch.atan2(heading[:, 3], heading[:, 0])
-        target = leader.robot_body_pos_w[env_ids, 0] + RANGE * self.toward(turn)
+        travel = leader.motion.body_pos_w[then, 0] - leader.motion.body_pos_w[now, 0]
+        target = leader.robot_body_pos_w[env_ids, 0] + quat_apply(heading, travel) + RANGE * self.toward(turn)
         self.on[env_ids] = True
-        self._place(env_ids, math.pi + turn, target[:, :2], self.first)
+        self._place(env_ids, math.pi + turn, target[:, :2])
 
     def _resample_command(self, env_ids: torch.Tensor) -> None:
         """A reset: parked until the next cue."""
@@ -152,7 +161,7 @@ class SpawnedMotionCommand(MotionCommand):
         done = ids[self.on[ids] & ((self.time_steps[ids] >= self.motion.time_step_total - 1) | jumped)]
         if len(done) > 0:
             self._park(done)
-        cued = ids[~self.on[ids] & self.cue[now]]
+        cued = ids[~self.on[ids] & (self.cue[now] >= 0)]
         if len(cued) > 0:
             self._spawn(cued)
         self.previous[ids] = now
@@ -378,7 +387,9 @@ def add_opponent(cfg: ManagerBasedRlEnvCfg, clip: str, policy: str, cue: str) ->
     opponent.spec_fn = partial(_shells, partial(_apart, robot.spec_fn))
     robot.spec_fn = partial(_shells, robot.spec_fn)
     robot.collisions = (*robot.collisions, *shell_collisions("robot", ENTITY))
-    opponent.collisions = (*opponent.collisions, *shell_collisions(ENTITY, "robot"))
+    assert opponent.collisions == (STIFF_COLLISION,), "the opponent's own primitives are put on BODY"
+    own = replace(STIFF_COLLISION, contype=BODY, conaffinity=BODY | 1)
+    opponent.collisions = (own, *shell_collisions(ENTITY, "robot"))
     x, y, z = opponent.init_state.pos
     opponent.init_state.pos = (x + APART, y, z)
     leader = cfg.commands["motion"]
