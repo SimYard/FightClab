@@ -9,6 +9,7 @@ from mjlab.tasks.registry import list_tasks, load_env_cfg
 
 import fightclab.tasks  # noqa: F401  (registering a task builds its configs)
 from fightclab.robots.unitree import N7520_22, unitree_motor
+from fightclab.tasks.k1 import duel
 
 
 def test_robots_compile() -> None:
@@ -22,6 +23,8 @@ def test_robots_compile() -> None:
         try:
             spec = spec_fn()
         except FileNotFoundError as missing:
+            if missing.filename != str(duel.SHELLS):
+                raise
             print(f"skipped a robot built on derived data: {missing.filename}")
             continue
         spec.compile()

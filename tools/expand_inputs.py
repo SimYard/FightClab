@@ -5,7 +5,9 @@
 The policy acts and values as before until training uses them. For a task that gained a last observation term
 (``k1/duel.py``'s SEEN) and a run resumed from OUT.pt. The new inputs' normalizer starts at mean 0, std 1 and, after
 the checkpoint's billions of samples, stays there: the term itself keeps them near 1. Adam's moments for the new
-weights start at zero, so their first few updates run a few times the learning rate.
+weights start at zero while its step count is past bias correction: under a steady gradient their steps are 3x the
+learning rate at the first update, 6.5x by the tenth and over 2x for about 290 (14 iterations of 5 epochs x 4
+minibatches).
 """
 
 import sys

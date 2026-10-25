@@ -23,6 +23,7 @@ from mjlab.tasks.tracking.mdp import MotionCommand
 from mjlab.utils.lab_api.math import quat_apply, quat_inv, quat_mul, yaw_quat
 from mjlab.utils.spec_config import CollisionCfg
 
+from fightclab.tasks.k1.footwork_motion import FPS
 from fightclab.tasks.k1.strikes import STRIKES, H
 
 if TYPE_CHECKING:
@@ -52,9 +53,16 @@ IMPACT_STEPS = 2  # policy steps of a touch whose impulse is the hit (40 ms)
 PUSH_STEPS = 4  # a touch over 80 ms is a push: no score, and each further step costs
 IMPULSE_SCALE = 15.0  # N s of hit that earn 1 (the coach: a good jab's first 40 ms is 10-18 N s)
 PUSH_COST = 0.2  # per policy step of pushing, against 1 for IMPULSE_SCALE
+HIT_CAP = 2.0  # IMPULSE_SCALEs a hit is paid at most: an unbounded 535 N s spike blew the critic's loss up
 LAG_FREE, LAG_COST = 0.005, 0.005  # m of lag free in a strike; cost per cm beyond it per policy step
 LAG_BODIES = ("LINK_BASE", "LINK_ANKLE_ROLL_L", "LINK_ANKLE_ROLL_R")  # the worst of these is charged
 PHYSICS_DT = 0.005  # s per substep of the contact sensor's history
+
+
+def step_labels(motion: MotionCommand, step_dt: float) -> list[str]:
+    """The skill at each of ``motion``'s env steps, from the labels next to its file (``steps.py``, at FPS)."""
+    labels = Path(motion.cfg.motion_file).with_suffix(".labels.txt").read_text().split()
+    return [labels[min(round(t * step_dt * FPS), len(labels) - 1)] for t in range(motion.motion.time_step_total)]
 
 
 def makiwara_spec() -> mujoco.MjSpec:
@@ -135,9 +143,8 @@ class Makiwara:
         """Each frame's strike, and each strike's farthest frame and direction."""
         motion = env.command_manager.get_term(cfg.params["command_name"])
         assert isinstance(motion, MotionCommand)
-        labels = Path(motion.cfg.motion_file).with_suffix(".labels.txt").read_text().split()
         frames = motion.motion.time_step_total
-        names = [labels[min(round(t * env.step_dt * 30), len(labels) - 1)] for t in range(frames)]
+        names = step_labels(motion, env.step_dt)
         fist = motion.motion.body_pos_w[:, motion.cfg.body_names.index(FIST)]
         self.strike = torch.full((frames,), -1, dtype=torch.long, device=env.device)
         far, direction, depths = [], [], []
@@ -199,7 +206,7 @@ class Makiwara:
         velocity = env.scene["robot"].data.body_com_lin_vel_w
         trunk = ((velocity * self.trunk_mass[:, None]).sum(dim=1) * self.toward).sum(dim=-1)
         hit = (self.impulse - (-trunk).clamp(min=0.0)).clamp(min=0.0)
-        bonus = torch.where(pay, (hit / IMPULSE_SCALE).clamp(max=2.0), 0.0)
+        bonus = torch.where(pay, (hit / IMPULSE_SCALE).clamp(max=HIT_CAP), 0.0)
         self.paid |= ended  # one hit per strike; a push forfeits it
         self.impulse[ended] = 0.0
         reward = bonus - PUSH_COST * (self.touch > PUSH_STEPS).float()

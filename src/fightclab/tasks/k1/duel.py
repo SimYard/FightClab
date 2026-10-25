@@ -42,11 +42,10 @@ from fightclab.tasks.k1.footwork import OPPONENT_YAW
 ENTITY = "opponent"  # also its action term's and observation group's name
 COMMAND = "opponent_motion"
 HEAD_HITS = "opponent_fist_on_head"
-HEAD_CAP = 2.0  # makiwara hits a step at most, as the makiwara pays: a 535 N s spike blew the critic's loss up
-# m pelvis to pelvis: the standing jab's full reach to a T800 head (0.965 m, the coach) less the makiwara's depth, as a
-# jab punches through its target. At full reach a still head was touched by 31% of jabs, with 1.8 N s.
+# m pelvis to pelvis, measured: a head with no guard took 88% of the jabs at 0.88 m, with 7.5 N s, and 31% with 1.8 N s
+# at the standing jab's full reach to a T800 head (0.965 m, the coach): a jab punches through its target.
 RANGE = 0.88
-LEAD = 2 / 30  # s from the catch's start to the fist leaving the guard (the coach: the catch starts 0.05-0.08 s early)
+LEAD = 0.06  # s from the catch's start to the fist leaving the guard (the coach: the catch starts 0.05-0.08 s early)
 # The share of catches the opponent jabs at: half, as many without a hit as with one. Hit at every catch, the learner,
 # who knows the motion's phase, braced for it: from the fist's arrival its glove held 1-2 cm forward and 3 cm down of
 # the catch's place, where the fist pushes it back from, and with no jab it was off by more than the coach's 2.5 cm in
@@ -106,6 +105,7 @@ class SpawnedMotionCommand(MotionCommand):
         self.origin = self.motion.body_pos_w[0, 0].clone()  # the clip's first pelvis, the placement's pivot
         fist = self.motion.body_pos_w[:, self.cfg.body_names.index(makiwara.FIST)]
         reach = (fist - fist[0]) @ self.toward(torch.zeros(1, device=self.device))[0]
+        assert (reach > ONSET).any(), f"{cfg.motion_file}: the lead fist never leaves the guard toward the opponent"
         self.onset = int(torch.argmax((reach > ONSET).int()))
         self.cue: torch.Tensor | None = None  # per leader step: the step of the cue its clip starts for, or -1
         self.previous = torch.zeros(n, dtype=torch.long, device=self.device)  # the leader's step at the last update
@@ -125,14 +125,14 @@ class SpawnedMotionCommand(MotionCommand):
     def _cues(self) -> torch.Tensor:
         """Per leader step, the cue step whose clip starts there (or -1): from the leader's motion's labels."""
         leader = self.leader
-        labels = Path(leader.cfg.motion_file).with_suffix(".labels.txt").read_text().split()
         total = leader.motion.time_step_total
-        names = [labels[min(round(t * self._env.step_dt * 30), len(labels) - 1)] for t in range(total)]
+        names = makiwara.step_labels(leader, self._env.step_dt)
         cue = torch.full((total,), -1, dtype=torch.long, device=self.device)
         for t in range(1, total):
             start = t + round(LEAD / self._env.step_dt) - self.onset
             if names[t] == self.cfg.cue and names[t - 1] != self.cfg.cue and start >= 0:
                 cue[start] = t
+        assert (cue >= 0).any(), f"{leader.cfg.motion_file}: no {self.cfg.cue} for the opponent"
         return cue
 
     def _place(self, env_ids: torch.Tensor, yaw: torch.Tensor, xy: torch.Tensor) -> None:
@@ -191,10 +191,7 @@ class SpawnedMotionCommand(MotionCommand):
 
     def _placed(self, pos: torch.Tensor) -> torch.Tensor:
         """Clip positions (envs, ..., 3) where the clip is placed."""
-        shape = (-1,) + (1,) * (pos.dim() - 2) + (4,)
-        return quat_apply(self.turn.view(shape).expand(*pos.shape[:-1], 4), pos - self.origin) + self.offset.view(
-            (*shape[:-1], 3)
-        )
+        return self._turned(pos - self.origin) + self.offset.view((-1,) + (1,) * (pos.dim() - 2) + (3,))
 
     def _turned(self, v: torch.Tensor) -> torch.Tensor:
         shape = (-1,) + (1,) * (v.dim() - 2) + (4,)
@@ -369,10 +366,10 @@ def fist_on_head(substeps: int) -> ContactSensorCfg:
 
 
 def head_hits(env: ManagerBasedRlEnv) -> torch.Tensor:
-    """The impulse of the opponent's fist into the head this step, in makiwara hits (``makiwara.IMPULSE_SCALE``)."""
+    """The opponent's impulse into the head this step, in makiwara hits (``makiwara.IMPULSE_SCALE``)."""
     force = env.scene[HEAD_HITS].data.force_history  # (envs, head bodies, substeps, 3)
     impulse = torch.linalg.norm(force, dim=-1).sum(dim=(1, 2)) * makiwara.PHYSICS_DT
-    return (impulse / makiwara.IMPULSE_SCALE).clamp(max=HEAD_CAP)
+    return (impulse / makiwara.IMPULSE_SCALE).clamp(max=makiwara.HIT_CAP)
 
 
 def _apart(spec_fn: Callable[[], mujoco.MjSpec]) -> mujoco.MjSpec:

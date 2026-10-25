@@ -1,6 +1,6 @@
 """Fit capsules and boxes to T800's upper-body visual meshes, for robot-to-robot contact (``k1/duel.py``).
 
-    CUDA_VISIBLE_DEVICES= uv run python tools/fit_primitives_t800.py OUT.json [BODY_REGEX]
+    CUDA_VISIBLE_DEVICES= uv run python tools/fit_primitives_t800.py OUT.json
 
 MuJoCo Warp collides capsule pairs and capsule-box pairs analytically; meshes go through the general convex pipeline,
 and 896 convex pieces cut by CoACD made a duel step 1.4 s at 4096 envs. Fitting primitives to a mesh is also closer
@@ -33,8 +33,10 @@ SHAPES = {
     "LINK_ELBOW_PITCH_[LR]": ("capsule", 1),
     "LINK_ELBOW_YAW_[LR]": ("capsule", 3),
 }
-SURFACE = 5_000  # points of the visual surface per step
+SURFACE = 5_000  # points of the visual surface per step, and of the primitives' surface for the stats
+FIT_POINTS = 60_000  # points of the visual surface the steps draw from
 DENSE = 300_000  # points of the visual surface for the nearest-surface lookup (0.5 mm on a head)
+KMEANS_ROUNDS = 20  # rounds of k-means for the starting clusters
 ON_SHAPE = 500  # points per primitive's surface per step
 STEPS, LEARNING_RATE = 800, 5e-3
 COVER_WEIGHT = 20.0  # a point of the robot outside its primitives is worse than a primitive standing off it
@@ -155,7 +157,7 @@ def fit(points: np.ndarray, dense: cKDTree, shape: str, k: int, seed: int) -> tu
     """Primitives of ``shape`` fitted to the surface ``points``; their cover and tightness in cm."""
     rng = np.random.default_rng(seed)
     centres = points[rng.choice(len(points), k, replace=False)]
-    for _ in range(20):  # k-means for the starting clusters
+    for _ in range(KMEANS_ROUNDS):  # k-means for the starting clusters
         label = np.argmin(np.linalg.norm(points[:, None] - centres, axis=-1), axis=1)
         centres = np.array([points[label == j].mean(0) for j in range(k)])
     prims = (Capsules if shape == "capsule" else Boxes)([points[label == j] for j in range(k)])
@@ -175,7 +177,7 @@ def fit(points: np.ndarray, dense: cKDTree, shape: str, k: int, seed: int) -> tu
         opt.step()
     with torch.no_grad():
         out = prims.sdf(p).min(-1).values.clamp(min=0).numpy()
-        x = prims.on_surface(5_000, gen)
+        x = prims.on_surface(SURFACE, gen)
         x = x[prims.sdf(x).min(-1).values > INSIDE].numpy()
         off = dense.query(x)[0]
     stats = {
@@ -192,14 +194,13 @@ if __name__ == "__main__":
     torch.set_default_dtype(torch.float64)
     torch.set_num_threads(4)  # the machine is shared
     out_path = Path(sys.argv[1])
-    only = re.compile(sys.argv[2] if len(sys.argv) > 2 else ".")  # noqa: PLR2004
-    result = json.loads(out_path.read_text()) if out_path.exists() else {}
+    result: dict[str, list[dict[str, object]]] = {}
     m, d, adr = model(ROBOTS["t800"])
     rng = np.random.default_rng(0)
     for g in range(m.ngeom):
         body = m.body(m.geom_bodyid[g]).name
         shape = next((s for pattern, s in SHAPES.items() if re.fullmatch(pattern, body)), None)
-        if m.geom_type[g] != mujoco.mjtGeom.mjGEOM_MESH or shape is None or not only.search(body):
+        if m.geom_type[g] != mujoco.mjtGeom.mjGEOM_MESH or shape is None:
             continue
         i = m.geom_dataid[g]
         v = m.mesh_vert[m.mesh_vertadr[i] : m.mesh_vertadr[i] + m.mesh_vertnum[i]].astype(np.float64)
@@ -207,7 +208,8 @@ if __name__ == "__main__":
         rot = np.zeros(9)
         mujoco.mju_quat2Mat(rot, m.geom_quat[g])
         v = v @ rot.reshape(3, 3).T + m.geom_pos[g]  # into the body's frame
-        prims, stats = fit(surface(v, f, 60_000, rng), cKDTree(surface(v, f, DENSE, rng)), *shape, seed=0)
+        prims, stats = fit(surface(v, f, FIT_POINTS, rng), cKDTree(surface(v, f, DENSE, rng)), *shape, seed=0)
+        assert body not in result, f"{body}: a second visual mesh would replace the first's primitives"
         result[body] = prims.export()
         print(f"{body}: {shape[1]} {shape[0]}s, cm: {stats}", flush=True)
     out_path.write_text(json.dumps(result, indent=1))

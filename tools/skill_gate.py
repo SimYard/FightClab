@@ -15,7 +15,8 @@ follow one another from the frame before to the frame after (no reset or wrap of
 Each record pairs the robot with the reference frame it was just tracking. A skill missing from the rollout, or never
 touching the pad, gets NaN, which fails. With BASELINE.json, prints each metric against it with TOLERANCE and exits 1
 if any fails. A fine-tune that loses a skill without falling (duel2: the jab's 40 ms impulse 20 -> 10 N s) shows in
-no training curve, only here.
+no training curve, only here. A checkpoint from before the tasks saw an opponent loads only widened by
+``tools/expand_inputs.py``.
 """
 
 import json
