@@ -199,6 +199,44 @@ Order: jab and catch generators, then the library tracker with a statue, then a 
 catcher (warm-up), then shared self-play with a pool. Later the skill commands can become a learned latent space
 (PULSE, ASE) for blends and combinations.
 
+## Growing the skill library
+
+From 3 skills to the UFC list's ~100 without breaking the old ones (the RL review, with GMT 2025, EGM 2025,
+BeyondMimic 2025, PHC 2023):
+
+1. **One tracker; every fine-tune on the whole library**, from the last accepted checkpoint. A fine-tune on a
+   subset forgets the rest: 1000 iterations on guard and catches only (duel2) halved the jab's 40 ms impulse
+   (20 to 10 N s), the step jab touched the pad in 13% of strikes instead of 95%, and the catch drifted off its
+   reference, while the head was hit as often as before. The old skills' data costs nothing to regenerate, so
+   training on all of it is the upper bound; freezing tricks (EWC, adapters, progressive nets) are for data that's
+   gone.
+2. **Shares, not equal time** (`steps.SKILL_SHARES`): a new skill gets about 35% of the motion's skill slots,
+   footwork stays at 15% of the time or more, every old skill keeps 0.5% or more, and a skill that regressed gets
+   more. A fine-tune then costs about the same 1000-1500 iterations whatever the library's size.
+3. **The gate** (`tools/skill_gate.py`): after a fine-tune, each skill against the accepted checkpoint's numbers
+   (strikes' touch rate, 40 ms impulse, pushes, recoil tail, aim; the catch's checks; footwork's travel and slip;
+   falls). A fine-tune is accepted only if every skill passes. No training curve shows a skill getting weaker
+   without falling. It rejects duel2 against mkc2 and accepts mkc2 against itself; two runs of one checkpoint differ
+   by 0.03 in rates and 0.8 N s in impulse, under the tolerances.
+4. **Opponents as props** inside the whole motion, like the makiwara: there only in their skill's frames,
+   re-anchored on the robot, unseen by the policy, their reward clamped per event. For the catch, a fist (a capsule
+   pulled along the jab's path, calibrated to the jab's 16-22 N s on the makiwara) rather than a second T800, which
+   every env pays for at every step. The second T800 is for evaluation and for the duel policy, which runs over a
+   frozen tracker.
+5. **Later**, when a family of skills needs its own environment (get-ups, single-leg kicks): a teacher per family,
+   each trained in its own env, distilled into one student by DAgger (rsl_rl's `Distillation`, with a wrapper over
+   several teachers); and, if rehearsal alone lets a skill slip, a penalty on the actions' distance from the previous
+   accepted policy.
+
+Separate policies per skill with a selector on top would leave the joins: each policy only knows its own states, and
+a fight switches skills mid-step (a catch while stepping, a counter out of a catch), every skill would relearn
+balance and footwork, and a combination (stepping while blocking) would need yet another policy. The selector is
+there anyway, the duel policy over one tracker's references; per-skill experts appear only as teachers.
+
+Fine-tunes of a converged tracker run with an entropy coefficient of 0.001 (mjlab's 0.005 let duel2's noise grow 19%
+once its task gave no signal), and every task term is bounded per step (an unbounded 535 N s spike blew the critic's
+loss up a thousandfold).
+
 ## Data
 
 Hands and feet must both be in frame: a jab's step and weight shift come from the legs, and GVHMR invents legs it
