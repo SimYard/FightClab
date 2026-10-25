@@ -75,13 +75,16 @@ PELVIS_WINDOW = 15
 # m the pelvis sits below the clips' stance: their rear leg was nearly straight, and with the pelvis following the
 # feet it could not reach its foot during the lead step.
 PELVIS_DROP = 0.04
-# Strikes in random_commands. The approach jab came first (Varga steps in with it at 5:31.8 of "Combining Footwork &
-# Punches"); trained alone, its step leaked into the standing jab (a shuffle forward), so all three now.
-TRAIN_STRIKES = ("step_jab", "jab", "jab_body")
 # Unit moves in the opponent's frame (forward, left) and which foot steps first (0 left/lead, 1 right/rear).
 COMMANDS = {"forward": ((1, 0), 0), "back": ((-1, 0), 1), "left": ((0, 1), 0), "right": ((0, -1), 1), "stop": None}
 CATCH = "catch"  # the rear-hand catch of a head jab (``catch.py``)
-CATCH_SHARE = 0.35  # of the moves in random_commands followed by a catch (one every 15 s, as many as head jabs)
+# The skills of random_commands, every one learned so far, always (a fine-tune on some of them forgot the rest;
+# docs/duel.md, "Growing the skill library"): after each move a strike slot, then a defence slot, each filled with its
+# chance, by its skills' shares. A new skill gets about 35% of its slot and every old one 0.5% or more. The approach
+# jab came first (Varga steps in with it at 5:31.8 of "Combining Footwork & Punches"); trained alone, its step leaked
+# into the standing jab (a shuffle forward). Today's: mkc2's mix, a strike after half the moves and a catch after 35%,
+# half of those straight out of a strike.
+SLOTS = (({"step_jab": 1.0, "jab": 1.0, "jab_body": 1.0}, 0.5), ({CATCH: 1.0}, 0.35))
 
 
 class Aim(NamedTuple):
@@ -317,23 +320,29 @@ def strike(
 
 
 def random_commands(seconds: float, seed: int = 0) -> list[Command]:
-    """Moves of 1-4 s in random order, each followed by a strike and by a stop half the time; about ``seconds`` long.
+    """Moves of 1-4 s in random order with skills and stops between them; about ``seconds`` long.
 
-    Each strike goes to a random ``AIMS`` point, stepping in by a random ``STEP_RANGE`` step. CATCH_SHARE of the moves
-    are also followed by a catch.
+    After each move, SLOTS' skills, then a stop half the time. Each strike goes to a random ``AIMS`` point, stepping in
+    by a random ``STEP_RANGE`` step.
     """
     rng = np.random.default_rng(seed)
     out: list[Command] = [("stop", 1.0)]
     moves = [c for c in COMMANDS if c != "stop"]
     while sum(c[1] for c in out) < seconds:
         out.append((str(rng.choice(moves)), float(rng.uniform(1.0, 4.0))))
-        if rng.random() < 0.5:  # noqa: PLR2004
-            name = str(rng.choice(TRAIN_STRIKES))
-            (low, high), (left, right) = AIMS[STRIKES[name][0]]
-            point = Aim(float(rng.uniform(low, high)), float(rng.uniform(left, right)), float(rng.uniform(*STEP_RANGE)))
-            out.append((name, float(rng.uniform(0.8, 1.5)), point))
-        if rng.random() < CATCH_SHARE:
-            out.append((CATCH, float(rng.uniform(0.6, 1.2))))
+        for shares, chance in SLOTS:
+            if rng.random() >= chance:
+                continue
+            weights = np.array(list(shares.values()))
+            name = str(rng.choice(list(shares), p=weights / weights.sum()))
+            if name == CATCH:
+                out.append((CATCH, float(rng.uniform(0.6, 1.2))))
+            else:
+                (low, high), (left, right) = AIMS[STRIKES[name][0]]
+                point = Aim(
+                    float(rng.uniform(low, high)), float(rng.uniform(left, right)), float(rng.uniform(*STEP_RANGE))
+                )
+                out.append((name, float(rng.uniform(0.8, 1.5)), point))
         if rng.random() < 0.5:  # noqa: PLR2004
             out.append(("stop", float(rng.uniform(0.5, 2.0))))
     return out
