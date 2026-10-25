@@ -6,8 +6,8 @@ Tasks:
   back, lunged and skidded sideways), so the footwork is now tracked instead:
 - ``Fightclab-K1-Footwork-Tracking-T800``: T800 tracks generated footwork and jabs (``steps.py``, ``strikes.py``).
 - ``Fightclab-K1-Makiwara-T800``: the same with a makiwara in front of every jab, to hit, not push (``makiwara.py``).
-- ``Fightclab-K1-Jabber-T800``: the tracker catches the jabs of a second T800 moved by a frozen tracker
-  (``jabber.py``, ``duel.py``).
+- ``Fightclab-K1-Jabber-T800``: the makiwara task with a second T800, moved by a frozen tracker, jabbing at each catch
+  (``duel.py``).
 - ``Fightclab-K1-Tracking-T800``: T800 tracks ``MOTION_T800``, the K-1 clip made by GVHMR, ``tools/gvhmr_to_csv.py``,
   ``video_motion ... --ground`` and ``motion_npz ... <out.npz>``. The kick task's setup without its flight reward:
   these motions stay on the floor.
@@ -29,6 +29,7 @@ from fightclab.tasks.helicopter_kick.env_cfg import FEET
 from fightclab.tasks.helicopter_kick.tracking import helicopter_kick_tracking_env_cfg, ppo_runner_cfg
 from fightclab.tasks.k1 import duel, makiwara
 from fightclab.tasks.k1.footwork import still_head_action_scale, t800_footwork_env_cfg, t800_footwork_ppo_runner_cfg
+from fightclab.tasks.k1.steps import CATCH
 from fightclab.tracking import (
     BodiesTravel,
     bodies_pos,
@@ -44,9 +45,10 @@ MOTION_T800 = Path(__file__).parent / "k1_t800.npz"
 # Not in the repo (56 MB): ``python -m fightclab.tasks.k1.steps ~/fw_clips/steps_t800.csv random:600``, then
 # ``motion_npz t800`` it to this path.
 MOTION_FOOTWORK_T800 = Path.home() / "fw_clips" / "steps_t800.npz"
-# A scripted jabber and its catcher, in step (``jabber.py``). Not in the repo: ``python -m fightclab.tasks.k1.jabber
-# ~/fw_clips/jabber 600``, then ``motion_npz t800`` each CSV to these paths.
-MOTION_JABBER_T800 = {side: Path.home() / "fw_clips" / f"jabber_{side}.npz" for side in ("defender", "attacker")}
+# The opponent's jab at each catch: guard, a jab at the face's centre on a T800 head (docs/duel.md: 1.56-1.64 m high,
+# 0.045-0.075 m in), guard. Not in the repo: ``python -m fightclab.tasks.k1.steps ~/fw_clips/jab_clip.csv stop:0.3
+# jab:1.2@1.60,0.06 stop:0.3``, then ``motion_npz t800`` it to this path.
+MOTION_JAB_CLIP = Path.home() / "fw_clips" / "jab_clip.npz"
 # The jabber's tracker: a Fightclab-K1-Makiwara-T800 policy, exported by ``tools/export_policy.py`` (policies aren't
 # in the repo).
 OPPONENT_T800 = Path.home() / "fw_clips" / "opponent_t800.pt"
@@ -186,10 +188,9 @@ def t800_k1_makiwara_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
 
 
 def t800_k1_jabber_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-    """The footwork tracker in guard, catching a second T800's jabs (``jabber.py``, ``duel.py``)."""
-    cfg = t800_k1_footwork_tracking_env_cfg(play)
-    cfg.commands["motion"].motion_file = str(MOTION_JABBER_T800["defender"])
-    duel.add_opponent(cfg, str(MOTION_JABBER_T800["attacker"]), str(OPPONENT_T800))
+    """The whole library on the makiwara, a second T800 jabbing at each catch (``duel.py``)."""
+    cfg = t800_k1_makiwara_env_cfg(play)
+    duel.add_opponent(cfg, str(MOTION_JAB_CLIP), str(OPPONENT_T800), CATCH)
     cfg.scene.sensors = (*cfg.scene.sensors, duel.fist_on_head(cfg.decimation))
     # The catch learned with no jab coming placed the glove; a real one moves it.
     cfg.rewards["head_hits"] = RewardTermCfg(func=duel.head_hits, weight=-HIT_WEIGHT)
