@@ -13,6 +13,7 @@ Tasks:
   these motions stay on the floor.
 """
 
+from dataclasses import fields
 from pathlib import Path
 
 from mjlab.envs import ManagerBasedRlEnvCfg
@@ -22,7 +23,7 @@ from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.rl import RslRlOnPolicyRunnerCfg
 from mjlab.tasks.registry import register_mjlab_task
-from mjlab.tasks.tracking.mdp import motion_relative_body_orientation_error_exp
+from mjlab.tasks.tracking.mdp import MotionCommandCfg, motion_relative_body_orientation_error_exp
 from mjlab.tasks.tracking.rl import MotionTrackingOnPolicyRunner
 from mjlab.tasks.velocity.rl import VelocityOnPolicyRunner
 
@@ -182,8 +183,10 @@ def t800_k1_makiwara_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     cfg = t800_k1_footwork_tracking_env_cfg(play)
     cfg.scene.entities[makiwara.ENTITY] = makiwara.makiwara_entity()
     cfg.scene.sensors = (*cfg.scene.sensors, makiwara.makiwara_hits())
-    cfg.rewards["fists"].func = makiwara.fists_on_makiwara
-    cfg.rewards["makiwara"] = RewardTermCfg(
+    motion = cfg.commands["motion"]
+    assert isinstance(motion, MotionCommandCfg)
+    cfg.commands["motion"] = makiwara.HeldMotionCommandCfg(**{f.name: getattr(motion, f.name) for f in fields(motion)})
+    cfg.rewards[makiwara.REWARD] = RewardTermCfg(
         func=makiwara.Makiwara, weight=HIT_WEIGHT, params={"command_name": "motion"}
     )
     # The body jab's drop: the pelvis is 1 of 14 bodies in the body tracking, the root position's tolerance had grown
