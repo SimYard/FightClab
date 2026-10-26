@@ -42,6 +42,7 @@ from fightclab.tasks.k1.footwork import OPPONENT_YAW
 ENTITY = "opponent"  # also its action term's and observation group's name
 COMMAND = "opponent_motion"
 HEAD_HITS = "opponent_fist_on_head"
+LEAD_ON = "opponent_lead_on_robot"
 # m pelvis to pelvis, measured: a head with no guard took 88% of the jabs at 0.88 m, with 7.5 N s, and 31% with 1.8 N s
 # at the standing jab's full reach to a T800 head (0.965 m, the coach): a jab punches through its target.
 RANGE = 0.88
@@ -65,7 +66,6 @@ APART = 2.0
 # bodies on those primitives, so those stay for that.
 SHELLS = Path.home() / "fw_clips" / "t800_primitives.json"
 STRIKERS = re.compile("ELBOW_YAW")  # the forearms, the fist's end included (the robot has no hands)
-SHELL_FRICTION = 0.5  # no data for plastic shells; as the floor's rubber, to calibrate
 SHELL_GROUP = 3  # not drawn
 # contype bits of each robot's strikers and targets. A striker meets the other robot's strikers and targets, a
 # target only its strikers: no head on head, no robot on itself or the floor (those are the vendor's primitives).
@@ -103,10 +103,11 @@ class SpawnedMotionCommand(MotionCommand):
         self.turn = torch.zeros(n, 4, device=self.device)  # the clip's placement: a yaw quaternion and an offset
         self.offset = torch.zeros(n, 3, device=self.device)
         self.origin = self.motion.body_pos_w[0, 0].clone()  # the clip's first pelvis, the placement's pivot
-        fist = self.motion.body_pos_w[:, self.cfg.body_names.index(makiwara.FIST)]
-        reach = (fist - fist[0]) @ self.toward(torch.zeros(1, device=self.device))[0]
-        assert (reach > ONSET).any(), f"{cfg.motion_file}: the lead fist never leaves the guard toward the opponent"
-        self.onset = int(torch.argmax((reach > ONSET).int()))
+        self.fist = self.cfg.body_names.index(makiwara.FIST)
+        self.ahead = self.toward(torch.zeros(1, device=self.device))[0]  # the clip's way to the opponent
+        self.reach = (self.motion.body_pos_w[:, self.fist] - self.motion.body_pos_w[0, self.fist]) @ self.ahead
+        assert (self.reach > ONSET).any(), f"{cfg.motion_file}: the lead fist never leaves the guard"
+        self.onset = int(torch.argmax((self.reach > ONSET).int()))
         self.cue: torch.Tensor | None = None  # per leader step: the step of the cue its clip starts for, or -1
         self.previous = torch.zeros(n, dtype=torch.long, device=self.device)  # the leader's step at the last update
 
@@ -239,6 +240,37 @@ class SpawnedMotionCommand(MotionCommand):
         return self._turned(self.motion.body_ang_vel_w[self.time_steps, self.motion_anchor_body_index])
 
 
+class HeldSpawnedMotionCommand(makiwara.HeldMotionCommand, SpawnedMotionCommand):
+    """``SpawnedMotionCommand`` whose lead arm is held from the jab's first touch of the learner, as the makiwara's.
+
+    From the first contact of its lead forearm with the learner while it is out (LEAD_ON, any contact, the jab's way
+    out or not), where its reference fist is ``makiwara.INTO`` past where the fist was then. Played through, the clip's
+    arm drove on to full reach and its fist climbed a catching glove 9-11 cm.
+    """
+
+    def __init__(self, cfg: "SpawnedMotionCommandCfg", env: ManagerBasedRlEnv) -> None:
+        """No touch yet."""
+        self.touched = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+        super().__init__(cfg, env)
+
+    def _place(self, env_ids: torch.Tensor, yaw: torch.Tensor, xy: torch.Tensor) -> None:
+        """Nothing held or touched, then placed."""
+        self.shift[env_ids], self.touched[env_ids] = -1, False
+        super()._place(env_ids, yaw, xy)
+
+    def _update_command(self, env_ids: torch.Tensor | None = None) -> None:
+        """At a step, the hold on the frame just tracked (the makiwara's order); then on a frame."""
+        if env_ids is None:
+            force = self._env.scene[LEAD_ON].data.force_history  # (envs, bodies, substeps, 3)
+            first = self.on & ~self.touched & (force.norm(dim=-1).flatten(1) > 0).any(dim=-1)
+            way = quat_apply(self.turn, self.ahead.expand(self.num_envs, 3))
+            lead = ((self.body_pos_relative_w[:, self.fist] - self.robot_body_pos_w[:, self.fist]) * way).sum(-1)
+            self.stop = torch.where(first, self.reach[self.time_steps] - lead + makiwara.INTO, self.stop)
+            self.touched |= first
+            self.hold(self.touched, self.reach, torch.full_like(self.time_steps, len(self.reach) - 1))
+        super()._update_command(env_ids)
+
+
 @dataclass(kw_only=True)
 class SpawnedMotionCommandCfg(MotionCommandCfg):
     """``MotionCommandCfg`` (its motion: the clip), the ``leader`` command's name and the ``cue`` skill's label."""
@@ -246,9 +278,9 @@ class SpawnedMotionCommandCfg(MotionCommandCfg):
     leader: str
     cue: str
 
-    def build(self, env: ManagerBasedRlEnv) -> SpawnedMotionCommand:
+    def build(self, env: ManagerBasedRlEnv) -> HeldSpawnedMotionCommand:
         """The command."""
-        return SpawnedMotionCommand(self, env)
+        return HeldSpawnedMotionCommand(self, env)
 
 
 class OpponentAction(ActionTerm):
@@ -365,6 +397,18 @@ def fist_on_head(substeps: int) -> ContactSensorCfg:
     )
 
 
+def lead_on_robot(substeps: int) -> ContactSensorCfg:
+    """The opponent's lead forearm (the fist's end) on the learner, per physics substep of a policy step."""
+    return ContactSensorCfg(
+        name=LEAD_ON,
+        primary=ContactMatch(mode="body", pattern="LINK_ELBOW_YAW_L", entity=ENTITY),
+        secondary=ContactMatch(mode="subtree", pattern="LINK_BASE", entity="robot"),
+        fields=("force",),
+        reduce="netforce",
+        history_length=substeps,
+    )
+
+
 def head_hits(env: ManagerBasedRlEnv) -> torch.Tensor:
     """The opponent's impulse into the head this step, in makiwara hits (``makiwara.IMPULSE_SCALE``)."""
     force = env.scene[HEAD_HITS].data.force_history  # (envs, head bodies, substeps, 3)
@@ -398,7 +442,7 @@ def _shells(spec_fn: Callable[[], mujoco.MjSpec]) -> mujoco.MjSpec:
 
 def shell_collisions(own: str, other: str) -> tuple[CollisionCfg, CollisionCfg]:
     """``own``'s strikers and targets touching ``other``'s (STRIKE, TARGET), with friction, as stiff as the rest."""
-    common = {"condim": 3, "priority": 0, "friction": (SHELL_FRICTION,), "solref": STIFF_COLLISION.solref}
+    common = {"condim": 3, "priority": 0, "friction": (makiwara.FRICTION,), "solref": STIFF_COLLISION.solref}
     return (
         CollisionCfg(
             geom_names_expr=(".*_striker",),
@@ -441,6 +485,7 @@ def add_opponent(cfg: ManagerBasedRlEnvCfg, clip: str, policy: str, cue: str) ->
     spawned.entity_name, spawned.motion_file = ENTITY, clip
     spawned.pose_range, spawned.velocity_range, spawned.joint_position_range = {}, {}, (0.0, 0.0)
     cfg.commands[COMMAND] = spawned
+    cfg.scene.sensors = (*cfg.scene.sensors, lead_on_robot(cfg.decimation))
     joints = cfg.actions["joint_pos"]
     assert isinstance(joints, JointPositionActionCfg)
     cfg.actions[ENTITY] = OpponentActionCfg(

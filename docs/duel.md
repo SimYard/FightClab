@@ -68,9 +68,10 @@ the generator fits it.
 Trained without a target, the jab pushed a makiwara 20 cm inside its reach like a wall for 0.12 s and shoved itself
 25 cm back. A spring post (about 5 kg at the pad) now pops up in front of every strike of the motion, at a random
 depth inside the reference fist's full reach (0.02-0.12 H; the step jab 0.02-0.06 H, a target beyond standing reach)
-and side, re-anchored on the robot. The policy doesn't see it. While the fist touches it, only the fist's height is
-tracked. Paid: the first 40 ms of impulse, less what comes back into the trunk (all but the lead arm) as the touch
-ends, so the body carried in and the legs braced both pay and an arm hitting harder than the body holds doesn't.
+and side, re-anchored on the robot. The policy doesn't see it. From the fist's first touch the reference's lead arm
+skips to its way back ("The slide" below). Paid: the first 40 ms of impulse, less what comes back into the trunk (all
+but the lead arm) as the touch ends, so the body carried in and the legs braced both pay and an arm hitting harder
+than the body holds doesn't; less again for the fist's slide along the pad.
 A touch over 80 ms forfeits and costs; the worst of the pelvis and feet falling behind the reference's travel in a
 strike costs. Measured in the training env (512 envs, ~800 strikes per checkpoint, the RL reviewer's dump):
 
@@ -85,9 +86,7 @@ strike costs. Measured in the training env (512 envs, ~800 strikes per checkpoin
 Lessons on the way: paying the impulse alone bought it with arm speed and chest turn and shoved the robot back (the
 hit exceeded the body's momentum in 100% of hits); torso-anchored terms let the robot move its lead foot back instead
 of its body forward. The recoil tail comes from the deepest pads, where the jab is jammed (elbow bent 80-90 deg).
-Still open: the fist slides 5-7 cm up the pad during a touch (the arm pushes upward from a 1.34 m shoulder), so on a
-glove it may climb over (score catches by impulse into the surface and count follow-through head touches); the step
-jab carries 24 kg m/s of the reference's 37-44.
+The fist's slide up the pad: "The slide" below. Still open: the step jab carries 24 kg m/s of the reference's 37-44.
 
 **Jabs to any target** (`steps.AIMS`, mk6): each training strike draws its target's height and side (head 1.50-1.66 m
 and 0-0.09 m, body 1.15-1.30 m and 0-0.06 m) and the step jab its step (0.10-0.25 m); the pad spans 1.05-1.72 m. The
@@ -178,11 +177,61 @@ duel5 in the duel: 131 jabs, pelvis to pelvis 0.871 m at the fist's onset, track
 0.95 cm while jabbing), 2 falls; in the gate 0.047 falls a minute (mkc2 0.023, within its tolerance). The second T800
 costs 14% of the training's speed (25-26k steps a second against mkc2's 29.5k, 4096 envs).
 
-The jab isn't clean yet (the opponent's, mkc2's). On the glove its fist slides 9-11 cm up (medians of two runs; its
-reference 0.3 cm) and stops short of the head. Unblocked (the learner's rear arm passing through it), the fist touches
-the head for one step, leaves it at about 50 deg above horizontal and within 0.16 s is 8 cm above its reference (p90
-11 cm), where a jab should sink in and come back on its line. Its path rises into the target (from a 1.34 m shoulder
-to 1.60 m): the makiwara's 5-7 cm slide again.
+The jab wasn't clean (the opponent's, mkc2's). On the glove its fist slid 9-11 cm up (medians of two runs; its
+reference 0.3 cm) and stopped short of the head. Unblocked (the learner's rear arm passing through it), the fist
+touched the head for one step, left it at about 50 deg above horizontal and within 0.16 s was 8 cm above its reference
+(p90 11 cm), where a jab should sink in and come back on its line. The makiwara's slide again; fixed in "The slide".
+
+### The slide (`k1/makiwara.py`, `HeldMotionCommand`)
+
+Every jab slid up its target: up to 13.6-17.7 cm across its line within 0.16 s of the touch on the pad (duel5, medians
+of jab / body jab / step jab), 9-11 cm up a catching glove. The fist arrived on its line (5-10 deg off it), but the
+reference punched on to full reach: with the fist stopped, the tracked arm's links went on, the shoulder lifted the
+fist up the pad at 2-3 m/s, and sliding off was the cheapest way to end the touch within 80 ms. Now, from the fist's
+first touch, once the reference fist's ball would go 4 cm past the pad's face (its give under 300 N), the reference's
+lead arm (links and joints) skips to the frame the clip's fist is back at that reach and goes back to the guard from
+there, its pose relative to the torso moved with the torso's place, not its turn. The duel's jabber gets the same at
+its lead forearm's first contact with the learner. The fist's move across its line in the steps it touches (within
+0.16 s, a second touch included) takes the hit's pay past 3 cm, all of it past 15 cm (the coach: past 3 cm the force
+leaves the front knuckles). The pad and the robots' shells have friction 0.5.
+
+slide4 was trained with three known gaps, fixed in the next stage: the arm's return frame is found in the world but
+placed on the torso, so a torso still travelling forward (the step jab) leaves the fist short of the point; the
+policy sees that frame a step late, a frame further on; and the jabber's hold starts at any contact of its lead
+forearm, the jab's way out or not. A step that touches counts its whole move as slide, the part after the release too.
+
+Tried on the way, 1000 iterations from duel5 each:
+
+- the fist's target held alone (slide1): the slide halved, the rest of the arm still drove the fist up;
+- the whole arm held still 3 cm short of the face (slide2): the 40 ms impulse halved (19 to 11 N s), the torso had
+  nothing to drive;
+- held 4 cm past the face until the clip's arm came back (slide3): the fist stayed at the pad for 0.1-0.16 s (the
+  coach: a jab comes straight back); moved with the torso's turn too, it swept 4-11 cm across.
+
+The gate (512 envs) and the duel (128 envs, slide4 as both robots):
+
+| | duel5 | slide4 |
+|---|---|---|
+| slide (jab / body jab / step jab) | 17.7 / 17.0 / 13.6 cm within 0.16 s | 1.8 / 1.0 / 1.9 cm in the touch, 16 / 8 / 15% past 3 cm |
+| back 5 cm off the pad 0.1 s after the touch | | 100% |
+| 40 ms impulse | 19 / 24 / 20 N s, pushes 19 / 2 / 0% | 19 / 20 / 21 N s, no pushes |
+| gate: catch cover / on time / elbow | 0.85 / 0.87 / 0.90 | 0.92 / 0.95 / 0.92 |
+| duel: the jabber's fist up a glove in the touch | 9.4 cm | 3.1 cm, the glove's own give included |
+| duel: on an open head | | 0.0 cm |
+| fist height off the reference at the touch | -1.4 / +0.6 / -1.3 cm | -3.0 / -1.9 / -4.1 cm |
+| body jab's recoil tail | 9% | 17% |
+
+The gate now holds the 40 ms impulse to the coach's floor, 12 N s (a good jab is 10-18; duel5's 19-24 came from the
+arm driving on into the pad), the slide to at most 20% of hits past 3 cm (the RL review) and a median under 3 cm, and
+the way back to 80% of hits. The fist landing 2-3 cm lower and the body jab's recoil tail failed it and were accepted:
+the next stage places the pad anew and rebuilds the jab. The gate's catch checks swing between the checkpoints of one
+run (duel5's own code for 1000 more iterations: cover after footwork 0.59 at +300, 0.91 at +600), so the gate runs on
+the last checkpoints and takes the best one passing.
+
+Next (the coach): the pad stands DEPTH inside the full reach of the wrist end's origin, not of the fist's ball (10.7 cm
+further along the strike), so the jab lands with the elbow bent 51-86 deg (15 at full reach), and the pad's push folds
+it. Placed from the ball, its full reach 5-10 cm past the face, the reference fist would arrive at 1.3 m/s: the clip's
+minimum-jerk speed peaks mid-path (3.8 m/s 30 cm before full reach). The pad moves with a jab clip that peaks late.
 
 ## The RL review
 

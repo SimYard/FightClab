@@ -7,16 +7,18 @@ ENVS envs for SECONDS) and measures each skill of the motion by its labels, coun
 follow one another from the frame before to the frame after (no reset or wrap of the motion cut them):
 - strikes (jab, jab_body, step_jab): the share of strikes touching the pad, the first 40 ms of impulse (N s, median),
   the share pushing longer than 80 ms, the recoil tail (pelvis more than 1.75 cm behind its pre-strike spot within
-  0.5 s of the touch), the fist's height error at the touch (cm, p90 of its size);
+  0.5 s of the touch), the fist's height error at the touch (cm, p90 of its size), the share of hits that slid along
+  the pad past ``makiwara.SLIDE_FREE`` and the slide (cm, median; the makiwara's own measure), the share back BACK
+  in front of the pad BACK_AFTER after the touch;
 - catch: the K-1 coach's checks (``docs/duel.md``), each as the share of catches passing; positions relative to the
   torso (the tracked bodies don't include the head) and the elbow-pitch link (the tracked elbow);
 - footwork moves: the pelvis travel's error against the reference's over a move (cm, median), and the feet-slip cost;
 - every skill: the mean body position error (cm); overall falls per minute.
 Each record pairs the robot with the reference frame it was just tracking. A skill missing from the rollout, or never
-touching the pad, gets NaN, which fails. With BASELINE.json, prints each metric against it with TOLERANCE and exits 1
-if any fails. A fine-tune that loses a skill without falling (duel2: the jab's 40 ms impulse 20 -> 10 N s) shows in
-no training curve, only here. A checkpoint from before the tasks saw an opponent loads only widened by
-``tools/expand_inputs.py``.
+touching the pad, gets NaN, which fails. With BASELINE.json, prints each metric against it with TOLERANCE (or against
+BOUNDS) and exits 1 if any fails. A fine-tune that loses a skill without falling (duel2: the jab's 40 ms impulse
+20 -> 10 N s) shows in no training curve, only here. A checkpoint from before the tasks saw an opponent loads only
+widened by ``tools/expand_inputs.py``.
 """
 
 import json
@@ -35,7 +37,7 @@ from scipy.spatial.transform import Rotation
 from fightclab.tasks.k1 import catch, makiwara
 from fightclab.tasks.k1.footwork import OPPONENT_YAW
 from fightclab.tasks.k1.steps import CATCH, COMMANDS
-from fightclab.tasks.k1.strikes import STRIKES
+from fightclab.tasks.k1.strikes import STRIKES, H
 
 TASK = "Fightclab-K1-Makiwara-T800"
 ENVS, SECONDS = 512, 15.0  # about 800 strikes and 500 catches
@@ -44,11 +46,11 @@ TOUCH = 1e-4  # N s of push in a step that counts as touching the pad
 PUSH, RECOIL, RECOIL_WINDOW = 0.08, 0.0175, 0.5  # s, m, s
 COVER, DEPTH, ON_TIME, ELBOW = 0.025, (-0.03, 0.04), 0.15, 0.03  # the coach's catch checks (m, m, s, m)
 LEAD, PITCH, YAW, HOME, HOME_AFTER = 0.025, 5.0, 4.0, 0.04, 0.15  # (m, deg, deg, m, s)
+BACK, BACK_AFTER = 0.03 * H, 0.1  # the fist this far in front of the pad this soon after its touch (m, s; the coach)
 # Per metric: which way is worse, how much worse than the baseline passes, and whether that is a fraction of it.
 # Two seeds of one checkpoint differed by 0.03 in rates, 0.8 N s in impulse and 1-5 falls in 128 env-minutes.
 TOLERANCE: dict[str, tuple[str, float, bool]] = {
     "touch": ("lower", 0.05, False),
-    "j40": ("lower", 0.15, True),
     "push": ("higher", 0.03, False),
     "recoil": ("higher", 0.05, False),
     "height_p90_cm": ("higher", 1.0, False),
@@ -60,6 +62,16 @@ TOLERANCE: dict[str, tuple[str, float, bool]] = {
     "travel_cm": ("higher", 1.0, False),
     "slip": ("higher", 0.2, True),
     "falls_per_min": ("higher", 0.05, False),
+}
+# Metrics held to bounds instead of the baseline: which way is worse, and the bound. The jab's first 40 ms: the coach's
+# good jab is 10-18 N s, 12 his starting floor; duel5's 19-24 came from the arm driving on into the pad while the fist
+# slid up it (13-18 cm, 19% pushes). The slide: the share past SLIDE_FREE, at most the RL review's 0.2, and its median
+# under SLIDE_FREE (the coach). The way back: as many back as the slide's share leaves; a starting value.
+BOUNDS: dict[str, tuple[str, float]] = {
+    "j40": ("lower", 12.0),
+    "slide": ("higher", 0.2),
+    "slide_cm": ("higher", 100 * makiwara.SLIDE_FREE),
+    "back": ("lower", 0.8),
 }
 MOVES = tuple(k for k, v in COMMANDS.items() if v is not None)
 
@@ -77,7 +89,7 @@ def rollout(checkpoint: str) -> tuple[dict[str, np.ndarray], list[str], float]:
     policy = runner.get_inference_policy(device="cuda:0")
     motion = env.command_manager.get_term("motion")
     assert isinstance(motion, MotionCommand)
-    pad = env.reward_manager.get_term_cfg("makiwara").func
+    pad = env.reward_manager.get_term_cfg(makiwara.REWARD).func
     names = list(motion.cfg.body_names)
     body = {
         k: names.index(n)
@@ -90,7 +102,8 @@ def rollout(checkpoint: str) -> tuple[dict[str, np.ndarray], list[str], float]:
         )
     }
     slip = env.reward_manager.active_terms.index("feet_slip")
-    keys = ("t", "fell", "strike", "push", "toward", "body_err", "slip", "quat", *body, *(f"ref_{k}" for k in body))
+    keys = ("t", "fell", "strike", "push", "toward", "slide", "gap", "body_err", "slip", "quat", *body)
+    keys = (*keys, *(f"ref_{k}" for k in body))
     rec: dict[str, list[torch.Tensor]] = {k: [] for k in keys}
     obs = venv.get_observations()
     for _ in range(round(SECONDS / env.step_dt)):
@@ -104,6 +117,8 @@ def rollout(checkpoint: str) -> tuple[dict[str, np.ndarray], list[str], float]:
         rec["strike"].append(pad.strike[t])
         rec["push"].append((force * pad.toward[:, None]).sum(-1).abs().sum(-1) * makiwara.PHYSICS_DT)
         rec["toward"].append(pad.toward.clone())
+        rec["slide"].append(pad.slide.clone())
+        rec["gap"].append(pad.gap.clone())
         rec["body_err"].append(motion.metrics["error_body_pos"].clone())
         rec["slip"].append(-env.reward_manager._step_reward[:, slip])
         rec["quat"].append(motion.robot_body_quat_w[:, body["torso"]].clone())
@@ -146,7 +161,7 @@ def strike_metrics(rec: dict[str, np.ndarray], spans: list[tuple[int, int, int]]
     for e, t0, t1 in spans:
         hit = np.nonzero(rec["push"][t0:t1, e] > TOUCH)[0]
         if not len(hit):
-            rows.append((0.0, np.nan, np.nan, np.nan, np.nan))
+            rows.append((0.0, *(np.nan,) * 6))
             continue
         th = t0 + int(hit[0])
         off = rec["push"][th:t1, e] <= TOUCH
@@ -155,8 +170,12 @@ def strike_metrics(rec: dict[str, np.ndarray], spans: list[tuple[int, int, int]]
         window = slice(th, min(th + round(RECOIL_WINDOW / dt), t1))
         behind = -min(0.0, float(((rec["pelvis"][window, e] - rec["pelvis"][t0, e]) @ u).min()))
         height = rec["fist"][th, e, 2] - rec["ref_fist"][th, e, 2]
-        rows.append((1.0, rec["push"][th : th + 2, e].sum(), float(n * dt > PUSH), float(behind > RECOIL), height))
-    a = np.array(rows, dtype=float).reshape(-1, 5)
+        slide = rec["slide"][min(th + makiwara.SLIDE_WINDOW, t1 - 1), e]  # the makiwara's, once its window is over
+        back = rec["gap"][min(th + round(BACK_AFTER / dt), t1 - 1), e] >= BACK
+        rows.append(
+            (1.0, rec["push"][th : th + 2, e].sum(), float(n * dt > PUSH), float(behind > RECOIL), height, slide, back)
+        )
+    a = np.array(rows, dtype=float).reshape(-1, 7)
     hits = a[a[:, 0] > 0]
     return {
         "n": len(a),
@@ -165,6 +184,9 @@ def strike_metrics(rec: dict[str, np.ndarray], spans: list[tuple[int, int, int]]
         "push": mean(hits[:, 2]),
         "recoil": mean(hits[:, 3]),
         "height_p90_cm": 100 * float(np.percentile(np.abs(hits[:, 4]), 90)) if len(hits) else float("nan"),
+        "slide": mean(hits[:, 5] > makiwara.SLIDE_FREE),
+        "slide_cm": 100 * float(np.median(hits[:, 5])) if len(hits) else float("nan"),
+        "back": mean(hits[:, 6]),
     }
 
 
@@ -232,12 +254,16 @@ def compare(result: dict[str, dict[str, float]], baseline: dict[str, dict[str, f
         for k, v in metrics.items():
             if k == "n":
                 continue
-            worse, tol, relative = TOLERANCE[k]
-            base = baseline[skill][k]
-            limit = tol * abs(base) if relative else tol
-            passed = v >= base - limit if worse == "lower" else v <= base + limit
+            if k in BOUNDS:
+                worse, ref = BOUNDS[k]
+                passed, what = v >= ref if worse == "lower" else v <= ref, "bound"
+            else:
+                worse, tol, relative = TOLERANCE[k]
+                ref, what = baseline[skill][k], "baseline"
+                limit = tol * abs(ref) if relative else tol
+                passed = v >= ref - limit if worse == "lower" else v <= ref + limit
             ok &= passed
-            print(f"  {skill:9s} {k:14s} {v:8.3f}  baseline {base:8.3f}  {'ok' if passed else 'FAIL'}")
+            print(f"  {skill:9s} {k:14s} {v:8.3f}  {what:8s} {ref:8.3f}  {'ok' if passed else 'FAIL'}")
     return ok
 
 
