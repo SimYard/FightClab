@@ -6,27 +6,32 @@ Tasks:
   back, lunged and skidded sideways), so the footwork is now tracked instead:
 - ``Fightclab-K1-Footwork-Tracking-T800``: T800 tracks generated footwork and jabs (``steps.py``, ``strikes.py``).
 - ``Fightclab-K1-Makiwara-T800``: the same with a makiwara in front of every jab, to hit, not push (``makiwara.py``).
+- ``Fightclab-K1-Jabber-T800``: the makiwara task with a second T800, moved by a frozen tracker, jabbing at half the
+  catches (``duel.py``).
 - ``Fightclab-K1-Tracking-T800``: T800 tracks ``MOTION_T800``, the K-1 clip made by GVHMR, ``tools/gvhmr_to_csv.py``,
   ``video_motion ... --ground`` and ``motion_npz ... <out.npz>``. The kick task's setup without its flight reward:
   these motions stay on the floor.
 """
 
+from dataclasses import fields
 from pathlib import Path
 
 from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.envs.mdp.actions import JointPositionActionCfg
+from mjlab.managers.observation_manager import ObservationTermCfg
 from mjlab.managers.reward_manager import RewardTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.rl import RslRlOnPolicyRunnerCfg
 from mjlab.tasks.registry import register_mjlab_task
-from mjlab.tasks.tracking.mdp import motion_relative_body_orientation_error_exp
+from mjlab.tasks.tracking.mdp import MotionCommandCfg, motion_relative_body_orientation_error_exp
 from mjlab.tasks.tracking.rl import MotionTrackingOnPolicyRunner
 from mjlab.tasks.velocity.rl import VelocityOnPolicyRunner
 
 from fightclab.tasks.helicopter_kick.env_cfg import FEET
 from fightclab.tasks.helicopter_kick.tracking import helicopter_kick_tracking_env_cfg, ppo_runner_cfg
-from fightclab.tasks.k1 import makiwara
+from fightclab.tasks.k1 import duel, makiwara
 from fightclab.tasks.k1.footwork import still_head_action_scale, t800_footwork_env_cfg, t800_footwork_ppo_runner_cfg
+from fightclab.tasks.k1.steps import CATCH
 from fightclab.tracking import (
     BodiesTravel,
     bodies_pos,
@@ -42,6 +47,16 @@ MOTION_T800 = Path(__file__).parent / "k1_t800.npz"
 # Not in the repo (56 MB): ``python -m fightclab.tasks.k1.steps ~/fw_clips/steps_t800.csv random:600``, then
 # ``motion_npz t800`` it to this path.
 MOTION_FOOTWORK_T800 = Path.home() / "fw_clips" / "steps_t800.npz"
+# The opponent's jab at a catch: guard, a jab at the face's centre on a T800 head (docs/duel.md: 1.56-1.64 m high,
+# 0.045-0.075 m in), guard. Not in the repo: ``python -m fightclab.tasks.k1.steps ~/fw_clips/jab_clip.csv stop:0.3
+# jab:1.2@1.60,0.06 stop:0.3``, then ``motion_npz t800`` it to this path.
+MOTION_JAB_CLIP = Path.home() / "fw_clips" / "jab_clip.npz"
+# The jabber's tracker: a Fightclab-K1-Makiwara-T800 policy, exported by ``tools/export_policy.py`` (policies aren't
+# in the repo). One from before the tasks saw an opponent (mkc2) is widened by ``tools/expand_inputs.py`` first.
+OPPONENT_T800 = Path.home() / "fw_clips" / "opponent_t800.pt"
+# Per makiwara.IMPULSE_SCALE of a hit, landed on the makiwara or taken on the head: one 15 N s hit is worth a third of
+# a second of the fists' tracking.
+HIT_WEIGHT = 50.0
 
 
 def t800_k1_tracking_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
@@ -153,6 +168,13 @@ def t800_k1_footwork_tracking_env_cfg(play: bool = False) -> ManagerBasedRlEnvCf
     # feet for more than 0.3, and its centre of mass stayed 2 cm behind the jab and 5 cm behind the step jab, as far as
     # 0.3 allows (the RL review); the generator keeps every move within 0.5.
     cfg.events["foot_friction"].params["ranges"] = (0.5, 1.2)
+    # What the learner sees of an opponent: none here (``duel.opponent_fists``); ``duel.add_opponent`` points it at one.
+    # ponytail: a run from scratch with no opponent sees these zeros only, its normalizer's std goes to 0 and the first
+    # opponent's fists come in 100x; every run starts from a trained tracker (see the runner's entropy).
+    for group in ("actor", "critic"):
+        cfg.observations[group].terms[duel.SEEN] = ObservationTermCfg(
+            func=duel.opponent_fists, params={"asset_cfg": None}
+        )
     return cfg
 
 
@@ -161,15 +183,28 @@ def t800_k1_makiwara_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     cfg = t800_k1_footwork_tracking_env_cfg(play)
     cfg.scene.entities[makiwara.ENTITY] = makiwara.makiwara_entity()
     cfg.scene.sensors = (*cfg.scene.sensors, makiwara.makiwara_hits())
-    cfg.rewards["fists"].func = makiwara.fists_on_makiwara
-    # One 15 N s hit earns what a third of a second of the fists' tracking does.
-    cfg.rewards["makiwara"] = RewardTermCfg(func=makiwara.Makiwara, weight=50.0, params={"command_name": "motion"})
+    motion = cfg.commands["motion"]
+    assert isinstance(motion, MotionCommandCfg)
+    cfg.commands["motion"] = makiwara.HeldMotionCommandCfg(**{f.name: getattr(motion, f.name) for f in fields(motion)})
+    cfg.rewards[makiwara.REWARD] = RewardTermCfg(
+        func=makiwara.Makiwara, weight=HIT_WEIGHT, params={"command_name": "motion"}
+    )
     # The body jab's drop: the pelvis is 1 of 14 bodies in the body tracking, the root position's tolerance had grown
     # to 17 cm, and the high fist went untracked on the pad; trained with the makiwara the drop shrank to 0.03 H of
     # 0.045 (the RL review).
     cfg.rewards["pelvis_height"] = RewardTermCfg(
         func=feet_height, weight=2.0, params={"command_name": "motion", "body_names": ("LINK_BASE",), "std": 0.03}
     )
+    return cfg
+
+
+def t800_k1_jabber_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+    """The whole library on the makiwara, a second T800 jabbing at half the catches (``duel.py``)."""
+    cfg = t800_k1_makiwara_env_cfg(play)
+    duel.add_opponent(cfg, str(MOTION_JAB_CLIP), str(OPPONENT_T800), CATCH)
+    cfg.scene.sensors = (*cfg.scene.sensors, duel.fist_on_head(cfg.decimation))
+    # The catch learned with no jab coming placed the glove; a real one moves it.
+    cfg.rewards["head_hits"] = RewardTermCfg(func=duel.head_hits, weight=-HIT_WEIGHT)
     return cfg
 
 
@@ -206,6 +241,14 @@ register_mjlab_task(
     task_id="Fightclab-K1-Makiwara-T800",
     env_cfg=t800_k1_makiwara_env_cfg(),
     play_env_cfg=t800_k1_makiwara_env_cfg(play=True),
+    rl_cfg=t800_k1_footwork_tracking_ppo_runner_cfg(),
+    runner_cls=MotionTrackingOnPolicyRunner,
+)
+
+register_mjlab_task(
+    task_id="Fightclab-K1-Jabber-T800",
+    env_cfg=t800_k1_jabber_env_cfg(),
+    play_env_cfg=t800_k1_jabber_env_cfg(play=True),
     rl_cfg=t800_k1_footwork_tracking_ppo_runner_cfg(),
     runner_cls=MotionTrackingOnPolicyRunner,
 )

@@ -9,14 +9,25 @@ from mjlab.tasks.registry import list_tasks, load_env_cfg
 
 import fightclab.tasks  # noqa: F401  (registering a task builds its configs)
 from fightclab.robots.unitree import N7520_22, unitree_motor
+from fightclab.tasks.k1 import duel
 
 
 def test_robots_compile() -> None:
-    """Each task's robot model compiles."""
+    """Each task's robot model compiles.
+
+    A robot built on derived data that isn't here (a fresh clone, another machine) is named and skipped.
+    """
     tasks = [task for task in list_tasks() if task.startswith("Fightclab-")]
     assert tasks, "no FightClab tasks registered"
     for spec_fn in {load_env_cfg(task).scene.entities["robot"].spec_fn for task in tasks}:
-        spec_fn().compile()
+        try:
+            spec = spec_fn()
+        except FileNotFoundError as missing:
+            if missing.filename != str(duel.SHELLS):
+                raise
+            print(f"skipped a robot built on derived data: {missing.filename}")
+            continue
+        spec.compile()
 
 
 def test_unitree_curve() -> None:

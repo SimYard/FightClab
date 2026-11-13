@@ -6,6 +6,7 @@
 # Run it from a clone of the repo. It installs uv if needed, syncs the environment, generates the
 # training motion (~/fw_clips/steps_t800.*, about 600 s of moves, jabs and catches) and resumes training from
 # CHECKPOINT, a policy of Fightclab-K1-Makiwara-T800 or Fightclab-K1-Footwork-Tracking-T800 (policies aren't in git).
+# One from before these tasks saw an opponent (140 actor inputs) loads only widened by tools/expand_inputs.py.
 set -euo pipefail
 ckpt=$(readlink -f "$1")
 iterations=${2:-1500}
